@@ -71,36 +71,36 @@ def test_icpswap_api():
         return False
 
 def test_kongswap_api():
-    """Test KongSwap API connectivity (optional for MVP)"""
-    print("\n🔍 Testing KongSwap API (Optional)...")
+    """Test KongSwap API connectivity (canister-based architecture)"""
+    print("\n🔍 Testing KongSwap API (Canister-based)...")
     
-    endpoints = [
-        "https://api.kongswap.io/v1/stats/overview",
-        "https://api.kongswap.io/v1/tokens",
-        "https://api.kongswap.io/v1/pairs"
-    ]
-    
-    for endpoint in endpoints:
-        try:
-            print(f"   Testing: {endpoint}")
-            response = requests.get(endpoint, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
-                print(f"   ✅ {endpoint} - Status: 200, Data type: {type(data)}")
+    # Test base API endpoint first
+    try:
+        print("   Testing base API: https://api.kongswap.io")
+        response = requests.get("https://api.kongswap.io", timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('status') == 'ok':
+                print(f"   ✅ KongSwap base API online")
+                print(f"   📋 Version: {data.get('version', 'unknown')}")
+                print(f"   💬 Message: {data.get('message', 'N/A')}")
+                print("   📝 Architecture: ICP Canister-based (not REST endpoints)")
+                print("   🔧 Trading data requires canister integration")
                 return True
-            else:
-                print(f"   ⚠️ {endpoint} - Status: {response.status_code}")
-                
-        except requests.exceptions.RequestException as e:
-            print(f"   ❌ {endpoint} - Connection failed: {e}")
-        except json.JSONDecodeError:
-            print(f"   ❌ {endpoint} - Invalid JSON response")
-        except Exception as e:
-            print(f"   ❌ {endpoint} - Error: {e}")
+        
+        print(f"   ⚠️ Unexpected response from base API: {response.status_code}")
+        
+    except requests.exceptions.RequestException as e:
+        print(f"   ❌ Base API connection failed: {e}")
+    except json.JSONDecodeError:
+        print(f"   ❌ Base API returned invalid JSON")
+    except Exception as e:
+        print(f"   ❌ Base API test error: {e}")
     
-    print("ℹ️ KongSwap API not available - MVP will use ICPSwap only")
-    return True  # Return True for MVP since KongSwap is optional
+    print("ℹ️ KongSwap uses canister architecture - REST endpoints not available")
+    print("ℹ️ MVP will use ICPSwap for price data")
+    return True  # Return True since this is expected behavior
 
 def test_database():
     """Test database creation and basic operations"""

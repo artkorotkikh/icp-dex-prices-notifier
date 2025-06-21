@@ -18,10 +18,17 @@ class APIClient:
         
         # API endpoints
         self.icpswap_url = "https://uvevg-iyaaa-aaaak-ac27q-cai.raw.ic0.app/tickers"
+        
+        # KongSwap uses ICP canisters, not traditional REST API
+        # Base API exists but trading endpoints are canister-based
+        self.kongswap_base_url = "https://api.kongswap.io"
+        self.kongswap_canister_id = "rrkah-fqaaa-aaaaq-aadhq-cai"  # KongSwap backend canister
+        
+        # Future KongSwap API endpoints (when available)
         self.kongswap_urls = {
-            'overview': 'https://api.kongswap.io/v1/stats/overview',
-            'tokens': 'https://api.kongswap.io/v1/tokens',
-            'pairs': 'https://api.kongswap.io/v1/pairs'
+            'status': 'https://api.kongswap.io',
+            'canister': f'https://{self.kongswap_canister_id}.raw.ic0.app',
+            # Note: Actual endpoints TBD based on KongSwap's canister interface
         }
         
         # Cache to avoid too frequent requests
@@ -73,15 +80,22 @@ class APIClient:
         return None
     
     def get_kongswap_data(self) -> Optional[Dict]:
-        """Fetch data from KongSwap API - trying multiple endpoints"""
-        # Try different endpoints until we find one that works
-        for endpoint_name, url in self.kongswap_urls.items():
-            data = self._make_request(url)
-            if data:
-                logger.info(f"Successfully fetched data from KongSwap {endpoint_name} endpoint")
-                return data
+        """Fetch data from KongSwap API - canister-based system"""
+        # Check if KongSwap API is available
+        status_data = self._make_request(self.kongswap_base_url)
+        if status_data and status_data.get('status') == 'ok':
+            logger.info("KongSwap API is online but trading data requires canister integration")
+            
+            # TODO: Implement canister integration when KongSwap provides trading APIs
+            # For now, we acknowledge the API exists but trading endpoints aren't available
+            return {
+                'status': 'available',
+                'message': 'KongSwap uses canister-based architecture',
+                'version': status_data.get('version', 'unknown'),
+                'pairs': []  # No trading pairs available via REST API yet
+            }
         
-        logger.warning("No KongSwap endpoints responded successfully")
+        logger.info("KongSwap API not available - using ICPSwap only")
         return None
     
     def find_icp_pairs(self, data: List[Dict], target_pairs: List[str] = None) -> Dict[str, Dict]:
@@ -137,10 +151,10 @@ class APIClient:
         
         # Try KongSwap data (if available)
         kongswap_data = self.get_kongswap_data()
-        if kongswap_data:
-            # Note: KongSwap API structure might be different
-            # We'll need to adapt this based on actual API response
-            logger.info("KongSwap data available but format needs to be analyzed")
+        if kongswap_data and kongswap_data.get('status') == 'available':
+            logger.info(f"KongSwap API detected: {kongswap_data.get('message', '')}")
+            # KongSwap trading data will be available when they implement REST endpoints
+            # Currently uses canister-based architecture which requires different integration
         
         return all_pairs
     
@@ -169,16 +183,19 @@ class APIClient:
             logger.error(f"Error formatting price data: {e}")
             return "❌ Error formatting price data"
     
-    def health_check(self) -> Dict[str, bool]:
+    def health_check(self) -> Dict[str, str]:
         """Check if APIs are responding"""
         health_status = {}
         
         # Check ICPSwap
         icpswap_data = self._make_request(self.icpswap_url)
-        health_status['icpswap'] = icpswap_data is not None
+        health_status['icpswap'] = 'Connected' if icpswap_data is not None else 'Disconnected'
         
         # Check KongSwap
-        kongswap_data = self.get_kongswap_data()
-        health_status['kongswap'] = kongswap_data is not None
+        kongswap_status = self._make_request(self.kongswap_base_url)
+        if kongswap_status and kongswap_status.get('status') == 'ok':
+            health_status['kongswap'] = 'API Online (Canister-based)'
+        else:
+            health_status['kongswap'] = 'API Offline'
         
         return health_status 
