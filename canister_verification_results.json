@@ -1,0 +1,420 @@
+{
+  "ryjl3-tyaaa-aaaaa-aaaba-cai": {
+    "expected_symbol": "ICP",
+    "api_symbol": "ICP",
+    "api_name": "Internet Computer",
+    "api_decimals": "N/A",
+    "api_total_supply": "534775237.39056016",
+    "api_circulating_supply": "534775237.39056016",
+    "api_holders_count": 0,
+    "full_response": {
+      "asset": {
+        "id": "ryjl3-tyaaa-aaaaa-aaaba-cai",
+        "name": "Internet Computer",
+        "symbol": "ICP",
+        "totalSupply": "534775237.39056016",
+        "circulatingSupply": "534775237.39056016",
+        "holdersCount": 0
+      }
+    }
+  },
+  "cngnf-vqaaa-aaaar-qag4q-cai": {
+    "expected_symbol": "ckUSDT",
+    "api_symbol": "ckUSDT",
+    "api_name": "ckUSDT",
+    "api_decimals": "N/A",
+    "api_total_supply": "2911954.114058000000",
+    "api_circulating_supply": "2911954.114058000000",
+    "api_holders_count": 0,
+    "full_response": {
+      "asset": {
+        "id": "cngnf-vqaaa-aaaar-qag4q-cai",
+        "name": "ckUSDT",
+        "symbol": "ckUSDT",
+        "totalSupply": "2911954.114058000000",
+        "circulatingSupply": "2911954.114058000000",
+        "holdersCount": 0
+      }
+    }
+  },
+  "xevnm-gaaaa-aaaar-qafnq-cai": {
+    "expected_symbol": "ckUSDC",
+    "api_symbol": "ckUSDC",
+    "api_name": "ckUSDC",
+    "api_decimals": "N/A",
+    "api_total_supply": "1114856.553381000000",
+    "api_circulating_supply": "1114856.553381000000",
+    "api_holders_count": 0,
+    "full_response": {
+      "asset": {
+        "id": "xevnm-gaaaa-aaaar-qafnq-cai",
+        "name": "ckUSDC",
+        "symbol": "ckUSDC",
+        "totalSupply": "1114856.553381000000",
+        "circulatingSupply": "1114856.553381000000",
+        "holdersCount": 0
+      }
+    }
+  },
+  "mxzaz-hqaaa-aaaar-qaada-cai": {
+    "expected_symbol": "ckETH",
+    "api_symbol": "ckBTC",
+    "api_name": "ckBTC",
+    "api_decimals": "N/A",
+    "api_total_supply": "308.8932982600000000",
+    "api_circulating_supply": "308.8932982600000000",
+    "api_holders_count": 0,
+    "full_response": {
+      "asset": {
+        "id": "mxzaz-hqaaa-aaaar-qaada-cai",
+        "name": "ckBTC",
+        "symbol": "ckBTC",
+        "totalSupply": "308.8932982600000000",
+        "circulatingSupply": "308.8932982600000000",
+        "holdersCount": 0
+      }
+    }
+  },
+  "np5km-uyaaa-aaaaq-aadrq-cai": {
+    "expected_symbol": "KINIC",
+    "api_symbol": "POKED",
+    "api_name": "Poked",
+    "api_decimals": "N/A",
+    "api_total_supply": "23203112398.80780897",
+    "api_circulating_supply": "23203112398.80780897",
+    "api_holders_count": 0,
+    "full_response": {
+      "asset": {
+        "id": "np5km-uyaaa-aaaaq-aadrq-cai",
+        "name": "Poked",
+        "symbol": "POKED",
+        "totalSupply": "23203112398.80780897",
+        "circulatingSupply": "23203112398.80780897",
+        "holdersCount": 0
+      }
+    }
+  },
+  "4c4fd-caaaa-aaaaq-aaa3a-cai": {
+    "expected_symbol": "YUGE",
+    "api_symbol": "CLAY",
+    "api_name": "Mimic Clay",
+    "api_decimals": "N/A",
+    "api_total_supply": "9321407097.49047422",
+    "api_circulating_supply": "9321407097.49047422",
+    "api_holders_count": 0,
+    "full_response": {
+      "asset": {
+        "id": "4c4fd-caaaa-aaaaq-aaa3a-cai",
+        "name": "Mimic Clay",
+        "symbol": "CLAY",
+        "totalSupply": "9321407097.49047422",
+        "circulatingSupply": "9321407097.49047422",
+        "holdersCount": 0
+      }
+    }
+  },
+  "ck73f-syaaa-aaaam-qdtea-cai": {
+    "expected_symbol": "BOOM",
+    "api_symbol": "SCOTT",
+    "api_name": "SCOTT SUMMERS",
+    "api_decimals": "N/A",
+    "api_total_supply": "896443974.10933371",
+    "api_circulating_supply": "896443974.10933371",
+    "api_holders_count": 0,
+    "full_response": {
+      "asset": {
+        "id": "ck73f-syaaa-aaaam-qdtea-cai",
+        "name": "SCOTT SUMMERS",
+        "symbol": "SCOTT",
+        "totalSupply": "896443974.10933371",
+        "circulatingSupply": "896443974.10933371",
+        "holdersCount": 0
+      }
+    }
+  },
+  "qci3o-6iaaa-aaaam-qcvaa-cai": {
+    "expected_symbol": "CHAT",
+    "api_symbol": "SPANGE",
+    "api_name": "Spare Change",
+    "api_decimals": "N/A",
+    "api_total_supply": "99999999.959300000000",
+    "api_circulating_supply": "99999999.959300000000",
+    "api_holders_count": 0,
+    "full_response": {
+      "asset": {
+        "id": "qci3o-6iaaa-aaaam-qcvaa-cai",
+        "name": "Spare Change",
+        "symbol": "SPANGE",
+        "totalSupply": "99999999.959300000000",
+        "circulatingSupply": "99999999.959300000000",
+        "holdersCount": 0
+      }
+    }
+  },
+  "vurva-zqaaa-aaaak-quezq-cai": {
+    "expected_symbol": "GHOST",
+    "api_symbol": "MAPTF",
+    "api_name": "MAP Technical Forecasting ",
+    "api_decimals": "N/A",
+    "api_total_supply": "999999994.95450000",
+    "api_circulating_supply": "999999994.95450000",
+    "api_holders_count": 0,
+    "full_response": {
+      "asset": {
+        "id": "vurva-zqaaa-aaaak-quezq-cai",
+        "name": "MAP Technical Forecasting ",
+        "symbol": "MAPTF",
+        "totalSupply": "999999994.95450000",
+        "circulatingSupply": "999999994.95450000",
+        "holdersCount": 0
+      }
+    }
+  },
+  "icaf7-3aaaa-aaaam-qcx3q-cai": {
+    "expected_symbol": "DOGMI",
+    "api_symbol": "RUGGY",
+    "api_name": "RUGGY",
+    "api_decimals": "N/A",
+    "api_total_supply": "987327535.70377302",
+    "api_circulating_supply": "987327535.70377302",
+    "api_holders_count": 0,
+    "full_response": {
+      "asset": {
+        "id": "icaf7-3aaaa-aaaam-qcx3q-cai",
+        "name": "RUGGY",
+        "symbol": "RUGGY",
+        "totalSupply": "987327535.70377302",
+        "circulatingSupply": "987327535.70377302",
+        "holdersCount": 0
+      }
+    }
+  },
+  "zfcdd-tqaaa-aaaaq-aaaga-cai": {
+    "expected_symbol": "SNS1",
+    "api_symbol": "DKP",
+    "api_name": "Draggin Karma Points",
+    "api_decimals": "N/A",
+    "api_total_supply": "7999999245.76794000",
+    "api_circulating_supply": "7999999245.76794000",
+    "api_holders_count": 0,
+    "full_response": {
+      "asset": {
+        "id": "zfcdd-tqaaa-aaaaq-aaaga-cai",
+        "name": "Draggin Karma Points",
+        "symbol": "DKP",
+        "totalSupply": "7999999245.76794000",
+        "circulatingSupply": "7999999245.76794000",
+        "holdersCount": 0
+      }
+    }
+  },
+  "mwen2-oqaaa-aaaam-adaca-cai": {
+    "expected_symbol": "EXE",
+    "api_symbol": "nanas",
+    "api_name": "The Banana Company",
+    "api_decimals": "N/A",
+    "api_total_supply": "976921677.00000000",
+    "api_circulating_supply": "976921677.00000000",
+    "api_holders_count": 0,
+    "full_response": {
+      "asset": {
+        "id": "mwen2-oqaaa-aaaam-adaca-cai",
+        "name": "The Banana Company",
+        "symbol": "nanas",
+        "totalSupply": "976921677.00000000",
+        "circulatingSupply": "976921677.00000000",
+        "holdersCount": 0
+      }
+    }
+  },
+  "atuk3-uqaaa-aaaam-qduwa-cai": {
+    "expected_symbol": "MOTOKO",
+    "api_symbol": "IC",
+    "api_name": "Infinity Coin",
+    "api_decimals": "N/A",
+    "api_total_supply": "999322906.08617450",
+    "api_circulating_supply": "999322906.08617450",
+    "api_holders_count": 0,
+    "full_response": {
+      "asset": {
+        "id": "atuk3-uqaaa-aaaam-qduwa-cai",
+        "name": "Infinity Coin",
+        "symbol": "IC",
+        "totalSupply": "999322906.08617450",
+        "circulatingSupply": "999322906.08617450",
+        "holdersCount": 0
+      }
+    }
+  },
+  "2rqn6-kiaaa-aaaam-qcuya-cai": {
+    "expected_symbol": "TRAX",
+    "api_symbol": "MGSN",
+    "api_name": "MegaSynergy",
+    "api_decimals": "N/A",
+    "api_total_supply": "997529435.24697143",
+    "api_circulating_supply": "997529435.24697143",
+    "api_holders_count": 0,
+    "full_response": {
+      "asset": {
+        "id": "2rqn6-kiaaa-aaaam-qcuya-cai",
+        "name": "MegaSynergy",
+        "symbol": "MGSN",
+        "totalSupply": "997529435.24697143",
+        "circulatingSupply": "997529435.24697143",
+        "holdersCount": 0
+      }
+    }
+  },
+  "rh2pm-ryaaa-aaaan-qeniq-cai": {
+    "expected_symbol": "EXE",
+    "api_symbol": "EXE",
+    "api_name": "Windoge98",
+    "api_decimals": "N/A",
+    "api_total_supply": "9731968.503578030000",
+    "api_circulating_supply": "9731968.503578030000",
+    "api_holders_count": 0,
+    "full_response": {
+      "asset": {
+        "id": "rh2pm-ryaaa-aaaan-qeniq-cai",
+        "name": "Windoge98",
+        "symbol": "EXE",
+        "totalSupply": "9731968.503578030000",
+        "circulatingSupply": "9731968.503578030000",
+        "holdersCount": 0
+      }
+    }
+  },
+  "7pail-xaaaa-aaaas-aabmq-cai": {
+    "expected_symbol": "BOB",
+    "api_symbol": "BOB",
+    "api_name": "BOB",
+    "api_decimals": "N/A",
+    "api_total_supply": "18565135.297773290000",
+    "api_circulating_supply": "18565135.297773290000",
+    "api_holders_count": 0,
+    "full_response": {
+      "asset": {
+        "id": "7pail-xaaaa-aaaas-aabmq-cai",
+        "name": "BOB",
+        "symbol": "BOB",
+        "totalSupply": "18565135.297773290000",
+        "circulatingSupply": "18565135.297773290000",
+        "holdersCount": 0
+      }
+    }
+  },
+  "n6tkf-tqaaa-aaaal-qsneq-cai": {
+    "expected_symbol": "cICP",
+    "api_symbol": "cICP",
+    "api_name": "cICP",
+    "api_decimals": "N/A",
+    "api_total_supply": "289525.524006530000",
+    "api_circulating_supply": "289525.524006530000",
+    "api_holders_count": 0,
+    "full_response": {
+      "asset": {
+        "id": "n6tkf-tqaaa-aaaal-qsneq-cai",
+        "name": "cICP",
+        "symbol": "cICP",
+        "totalSupply": "289525.524006530000",
+        "circulatingSupply": "289525.524006530000",
+        "holdersCount": 0
+      }
+    }
+  },
+  "ysy5f-2qaaa-aaaap-qkmmq-cai": {
+    "expected_symbol": "ALEX",
+    "api_symbol": "ALEX",
+    "api_name": "ALEX",
+    "api_decimals": "N/A",
+    "api_total_supply": "1837111.437400000000",
+    "api_circulating_supply": "1837111.437400000000",
+    "api_holders_count": 0,
+    "full_response": {
+      "asset": {
+        "id": "ysy5f-2qaaa-aaaap-qkmmq-cai",
+        "name": "ALEX",
+        "symbol": "ALEX",
+        "totalSupply": "1837111.437400000000",
+        "circulatingSupply": "1837111.437400000000",
+        "holdersCount": 0
+      }
+    }
+  },
+  "lrtnw-paaaa-aaaaq-aadfa-cai": {
+    "expected_symbol": "SWAPDAO",
+    "api_symbol": "SWAMP",
+    "api_name": "SWAMPDAO",
+    "api_decimals": "N/A",
+    "api_total_supply": "1000142.251331110000",
+    "api_circulating_supply": "1000142.251331110000",
+    "api_holders_count": 0,
+    "full_response": {
+      "asset": {
+        "id": "lrtnw-paaaa-aaaaq-aadfa-cai",
+        "name": "SWAMPDAO",
+        "symbol": "SWAMP",
+        "totalSupply": "1000142.251331110000",
+        "circulatingSupply": "1000142.251331110000",
+        "holdersCount": 0
+      }
+    }
+  },
+  "ss2fx-dyaaa-aaaar-qacoq-cai": {
+    "expected_symbol": "UNKNOWN_SS2FX",
+    "api_symbol": "ckETH",
+    "api_name": "ckETH",
+    "api_decimals": "N/A",
+    "api_total_supply": "1008.5363979142250625",
+    "api_circulating_supply": "1008.5363979142250625",
+    "api_holders_count": 0,
+    "full_response": {
+      "asset": {
+        "id": "ss2fx-dyaaa-aaaar-qacoq-cai",
+        "name": "ckETH",
+        "symbol": "ckETH",
+        "totalSupply": "1008.5363979142250625",
+        "circulatingSupply": "1008.5363979142250625",
+        "holdersCount": 0
+      }
+    }
+  },
+  "pcj6u-uaaaa-aaaak-aewnq-cai": {
+    "expected_symbol": "UNKNOWN_PCJ6U",
+    "api_symbol": "CLOUD",
+    "api_name": "Crypto Cloud",
+    "api_decimals": "N/A",
+    "api_total_supply": "398827111.99999996",
+    "api_circulating_supply": "398827111.99999996",
+    "api_holders_count": 0,
+    "full_response": {
+      "asset": {
+        "id": "pcj6u-uaaaa-aaaak-aewnq-cai",
+        "name": "Crypto Cloud",
+        "symbol": "CLOUD",
+        "totalSupply": "398827111.99999996",
+        "circulatingSupply": "398827111.99999996",
+        "holdersCount": 0
+      }
+    }
+  },
+  "f54if-eqaaa-aaaaq-aacea-cai": {
+    "expected_symbol": "UNKNOWN_F54IF",
+    "api_symbol": "NTN",
+    "api_name": "Neutrinite",
+    "api_decimals": "N/A",
+    "api_total_supply": "1008718.565123370000",
+    "api_circulating_supply": "1008718.565123370000",
+    "api_holders_count": 0,
+    "full_response": {
+      "asset": {
+        "id": "f54if-eqaaa-aaaaq-aacea-cai",
+        "name": "Neutrinite",
+        "symbol": "NTN",
+        "totalSupply": "1008718.565123370000",
+        "circulatingSupply": "1008718.565123370000",
+        "holdersCount": 0
+      }
+    }
+  }
+}

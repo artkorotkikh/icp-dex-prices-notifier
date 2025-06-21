@@ -15,8 +15,21 @@ class TelegramBot:
         self.api_client = api_client
         self.application = None
         
-        # Available trading pairs
-        self.available_pairs = ['ICP/nICP', 'ICP/USD', 'ICP/USDT', 'ICP/USDC']
+        # Available trading pairs (dynamically updated from API)
+        self.available_pairs = ['NICP/ICP', 'CKUSDT/ICP', 'CKUSDC/ICP']
+        
+        # Pair aliases for user-friendly input
+        self.pair_aliases = {
+            'ICP/NICP': 'NICP/ICP',
+            'ICP/nICP': 'NICP/ICP', 
+            'ICP/USDT': 'CKUSDT/ICP',
+            'ICP/USDC': 'CKUSDC/ICP',
+            'ICP/ckUSDT': 'ICP/ckUSDT',
+            'ICP/ckUSDC': 'ckUSDC/ckUSDT',
+            'NICP/ICP': 'NICP/ICP',
+            'CKUSDT/ICP': 'CKUSDT/ICP',
+            'CKUSDC/ICP': 'CKUSDC/ICP'
+        }
         
         # Alert types
         self.alert_types = {
@@ -50,6 +63,92 @@ class TelegramBot:
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         
         logger.info("Telegram bot handlers setup complete")
+    
+    def update_available_pairs(self):
+        """Update available pairs from API client"""
+        try:
+            price_data = self.api_client.get_icp_prices()
+            if price_data:
+                self.available_pairs = list(price_data.keys())
+                logger.info(f"Updated available pairs: {len(self.available_pairs)} pairs")
+        except Exception as e:
+            logger.error(f"Error updating available pairs: {e}")
+
+    def resolve_pair_name(self, user_input: str) -> str:
+        """Resolve user input to actual pair name, preferring higher volume pairs"""
+        user_input = user_input.upper().strip()
+        
+        # Update available pairs from API
+        self.update_available_pairs()
+        
+        # Get current price data for volume comparison
+        try:
+            price_data = self.api_client.get_icp_prices()
+        except:
+            price_data = {}
+        
+        # Check if it's already a valid pair
+        if user_input in self.available_pairs:
+            return user_input
+            
+        # Check aliases
+        if user_input in self.pair_aliases:
+            return self.pair_aliases[user_input]
+        
+        # Smart resolution: find all matching pairs and prefer higher volume
+        matching_pairs = []
+        
+        # Parse user input
+        if '/' in user_input:
+            user_parts = user_input.split('/')
+            if len(user_parts) == 2:
+                token1, token2 = user_parts
+                
+                # Look for exact matches and reverse matches
+                for pair_name in self.available_pairs:
+                    if '/' in pair_name:
+                        pair_parts = pair_name.split('/')
+                        if len(pair_parts) == 2:
+                            p1, p2 = pair_parts
+                            
+                            # Normalize tokens for comparison
+                            def normalize_token(token):
+                                return token.replace('NICP', 'nICP').replace('CKUSDT', 'USDT').replace('CKUSDC', 'USDC')
+                            
+                            norm_user1, norm_user2 = normalize_token(token1), normalize_token(token2)
+                            norm_p1, norm_p2 = normalize_token(p1), normalize_token(p2)
+                            
+                            # Check for matches (both directions)
+                            if (norm_user1 == norm_p1 and norm_user2 == norm_p2) or \
+                               (norm_user1 == norm_p2 and norm_user2 == norm_p1):
+                                volume = price_data.get(pair_name, {}).get('volume_24h_usd', 0)
+                                matching_pairs.append((pair_name, volume))
+        
+        # If we found matching pairs, return the one with highest volume
+        if matching_pairs:
+            matching_pairs.sort(key=lambda x: x[1], reverse=True)  # Sort by volume desc
+            return matching_pairs[0][0]  # Return highest volume pair
+        
+        # Try some common variations
+        variations = [
+            user_input,
+            user_input.replace('NICP', 'nICP'),
+            user_input.replace('nICP', 'NICP'),
+            user_input.replace('/', '_'),
+            user_input.replace('_', '/'),
+            user_input.replace('CK', 'ck'),
+            user_input.replace('ck', 'CK'),
+            user_input.replace('USDT', 'ckUSDT'),
+            user_input.replace('USDC', 'ckUSDC')
+        ]
+        
+        for variation in variations:
+            if variation in self.pair_aliases:
+                return self.pair_aliases[variation]
+            if variation in self.available_pairs:
+                return variation
+                
+        return user_input  # Return original if no match found
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command"""
@@ -127,10 +226,14 @@ Type /help for all commands or choose an option below:
 • `/help` - Show this help message
 
 **📈 Available Pairs:**
-• ICP/nICP - ICP to Neuron ICP
-• ICP/USD - ICP to US Dollar
-• ICP/USDT - ICP to Tether
-• ICP/USDC - ICP to USD Coin
+• NICP/ICP - Neuron ICP to ICP (liquid staking)
+• CKUSDT/ICP - Chain Key USDT to ICP 
+• CKUSDC/ICP - Chain Key USDC to ICP
+
+**🔄 You can also use these formats:**
+• ICP/nICP → NICP/ICP
+• ICP/USDT → CKUSDT/ICP  
+• ICP/USDC → CKUSDC/ICP
 
 **⚡ Alert Types:**
 • `price_up` - Price increase alert
@@ -171,33 +274,140 @@ Need help? Contact @your_support_username
                 return
             
             if pair:
-                # Show specific pair
-                if pair in price_data:
-                    pair_info = price_data[pair]
-                    price_change = self.db.get_price_change(pair, 24)
-                    change_text = f"📈 +{price_change:.2f}%" if price_change and price_change > 0 else f"📉 {price_change:.2f}%" if price_change else "➡️ No change data"
+                # Find all matching pairs (not just the highest volume one)
+                matching_pairs = []
+                
+                if '/' in pair:
+                    user_parts = pair.split('/')
+                    if len(user_parts) == 2:
+                        token1, token2 = user_parts
+                        
+                        # Look for exact matches and reverse matches
+                        for pair_name in price_data.keys():
+                            if '/' in pair_name:
+                                pair_parts = pair_name.split('/')
+                                if len(pair_parts) == 2:
+                                    p1, p2 = pair_parts
+                                    
+                                    # Normalize tokens for comparison
+                                    def normalize_token(token):
+                                        return token.replace('NICP', 'nICP').replace('CKUSDT', 'USDT').replace('CKUSDC', 'USDC')
+                                    
+                                    norm_user1, norm_user2 = normalize_token(token1), normalize_token(token2)
+                                    norm_p1, norm_p2 = normalize_token(p1), normalize_token(p2)
+                                    
+                                    # Check for matches (both directions)
+                                    if (norm_user1 == norm_p1 and norm_user2 == norm_p2) or \
+                                       (norm_user1 == norm_p2 and norm_user2 == norm_p1):
+                                        volume = price_data.get(pair_name, {}).get('volume_24h_usd', 0)
+                                        matching_pairs.append((pair_name, volume))
+                
+                # If no matches found, try direct lookup
+                if not matching_pairs:
+                    resolved_pair = self.resolve_pair_name(pair)
+                    if resolved_pair in price_data:
+                        volume = price_data.get(resolved_pair, {}).get('volume_24h_usd', 0)
+                        matching_pairs.append((resolved_pair, volume))
+                
+                if matching_pairs:
+                    # Sort by volume (highest first)
+                    matching_pairs.sort(key=lambda x: x[1], reverse=True)
                     
-                    message = f"""
-🪙 **{pair}** 
+                    if len(matching_pairs) == 1:
+                        # Single match - show detailed info
+                        pair_name = matching_pairs[0][0]
+                        pair_info = price_data[pair_name]
+                        price_change = self.db.get_price_change(pair_name, 24)
+                        change_text = f"📈 +{price_change:.2f}%" if price_change and price_change > 0 else f"📉 {price_change:.2f}%" if price_change else "➡️ No change data"
+                        
+                        # Get source info
+                        source = pair_info.get('source', 'unknown').title()
+                        source_emoji = "🏪" if source.lower() == 'icpswap' else "🦍" if source.lower() == 'kongswap' else "📡"
+                        
+                        message = f"""
+🪙 **{pair_name}** 
+
 {self.api_client.format_price_data(pair_info)}
-{change_text}
-🕒 Last updated: {datetime.now().strftime('%H:%M:%S')}
-                    """
-                    await update.message.reply_text(message, parse_mode='Markdown')
+📈 **24h Change:** {change_text}
+{source_emoji} **Source:** {source}
+🕒 **Last updated:** {datetime.now().strftime('%H:%M:%S')}
+                        """
+                        await update.message.reply_text(message, parse_mode='Markdown')
+                    else:
+                        # Multiple matches - show comparison
+                        message = f"🪙 **{pair}** - Found {len(matching_pairs)} matches:\n\n"
+                        
+                        for i, (pair_name, volume) in enumerate(matching_pairs[:3], 1):  # Show top 3
+                            pair_info = price_data[pair_name]
+                            source = pair_info.get('source', 'unknown').lower()
+                            source_emoji = "🏪" if source == "icpswap" else "🦍" if source == "kongswap" else "📡"
+                            source_name = source.title()
+                            
+                            price = pair_info.get('price', 0)
+                            volume_24h = pair_info.get('volume_24h_usd', 0)
+                            
+                            # Format volume nicely
+                            if volume_24h >= 1000000:
+                                volume_str = f"${volume_24h/1000000:.1f}M"
+                            elif volume_24h >= 1000:
+                                volume_str = f"${volume_24h/1000:.1f}K"
+                            else:
+                                volume_str = f"${volume_24h:.0f}"
+                            
+                            message += f"**{i}. {pair_name}** {source_emoji}\n"
+                            message += f"   💰 ${price:.6f}\n"
+                            message += f"   📊 {volume_str} volume\n"
+                            message += f"   🔗 {source_name}\n\n"
+                        
+                        message += f"🕒 **Last updated:** {datetime.now().strftime('%H:%M:%S')}"
+                        await update.message.reply_text(message, parse_mode='Markdown')
                 else:
-                    await update.message.reply_text(f"❌ Pair {pair} not found or not available.")
+                    # Show available pairs in error message
+                    available_list = "\n".join([f"• {p}" for p in self.available_pairs])
+                    user_friendly_list = "\n".join([f"• {alias} (→ {actual})" for alias, actual in self.pair_aliases.items() if alias != actual])
+                    
+                    await update.message.reply_text(
+                        f"❌ Pair '{pair}' not found.\n\n"
+                        f"**Available pairs:**\n{available_list}\n\n"
+                        f"**You can also use:**\n{user_friendly_list}",
+                        parse_mode='Markdown'
+                    )
             else:
-                # Show all available pairs
-                message = "📊 **Current ICP Prices:**\n\n"
-                for pair_name, pair_info in price_data.items():
+                # Show all available pairs (limit to top 10 by volume for readability)
+                sorted_pairs = sorted(price_data.items(), key=lambda x: x[1].get('volume_24h_usd', 0), reverse=True)
+                top_pairs = sorted_pairs[:10]
+                
+                message = "📊 **Top 10 ICP Pairs by Volume:**\n\n"
+                
+                for i, (pair_name, pair_info) in enumerate(top_pairs, 1):
                     price_change = self.db.get_price_change(pair_name, 24)
                     change_emoji = "📈" if price_change and price_change > 0 else "📉" if price_change and price_change < 0 else "➡️"
                     change_text = f"{price_change:+.2f}%" if price_change else "N/A"
                     
-                    message += f"🪙 **{pair_name}**\n"
-                    message += f"💰 ${pair_info['price']:.6f} {change_emoji} {change_text}\n\n"
+                    # Format volume nicely
+                    volume_usd = pair_info.get('volume_24h_usd', 0)
+                    if volume_usd >= 1000000:
+                        volume_str = f"${volume_usd/1000000:.1f}M"
+                    elif volume_usd >= 1000:
+                        volume_str = f"${volume_usd/1000:.1f}K"
+                    else:
+                        volume_str = f"${volume_usd:.0f}"
+                    
+                    # Get source emoji
+                    source = pair_info.get('source', 'unknown').lower()
+                    source_emoji = "🏪" if source == 'icpswap' else "🦍" if source == 'kongswap' else "📡"
+                    
+                    message += f"{i:2d}. **{pair_name}** {source_emoji}\n"
+                    message += f"    💰 ${pair_info['price']:.6f} {change_emoji} {change_text}\n"
+                    message += f"    📊 Vol: {volume_str} | 💧 Liq: ${pair_info.get('liquidity_usd', 0)/1000:.0f}K\n\n"
                 
-                message += f"🕒 Last updated: {datetime.now().strftime('%H:%M:%S')}"
+                # Count sources
+                icpswap_count = sum(1 for _, p in price_data.items() if p.get('source', '').lower() == 'icpswap')
+                kongswap_count = sum(1 for _, p in price_data.items() if p.get('source', '').lower() == 'kongswap')
+                
+                message += f"🕒 **Last updated:** {datetime.now().strftime('%H:%M:%S')}\n"
+                message += f"📊 **Total pairs:** {len(price_data)} (🏪 {icpswap_count} ICPSwap, 🦍 {kongswap_count} KongSwap)\n"
+                message += f"💡 *Use `/price [pair]` for detailed info*"
                 await update.message.reply_text(message, parse_mode='Markdown')
         
         except Exception as e:
@@ -224,6 +434,41 @@ Need help? Contact @your_support_username
             return
         
         pair = context.args[0].upper()
+        resolved_pair = self.resolve_pair_name(pair)
+        
+        if resolved_pair not in self.available_pairs:
+            await update.message.reply_text(f"❌ Pair '{pair}' is not available. Available pairs: {', '.join(self.available_pairs)}")
+            return
+        
+        user_data = self.db.get_user_by_telegram_id(user.id)
+        if not user_data:
+            await update.message.reply_text("❌ Please start the bot first using /start")
+            return
+        
+        success = self.db.subscribe_user_to_pair(user_data['id'], resolved_pair)
+        if success:
+            display_name = pair if pair != resolved_pair else resolved_pair
+            await update.message.reply_text(f"✅ Successfully subscribed to {display_name} updates!")
+        else:
+            await update.message.reply_text("❌ Error subscribing to pair. Please try again.")
+    
+    async def unsubscribe_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /unsubscribe command"""
+        user = update.effective_user
+        self.db.update_user_activity(user.id)
+        
+        if not context.args:
+            await update.message.reply_text(
+                "❌ **Please specify a pair to unsubscribe from!**\n\n"
+                "**Usage:** `/unsubscribe [pair]`\n\n"
+                "**Example:** `/unsubscribe ICP/nICP`\n\n"
+                "**Available pairs:** " + ", ".join(self.available_pairs),
+                parse_mode='Markdown'
+            )
+            return
+        
+        pair = context.args[0].upper()
+        
         if pair not in self.available_pairs:
             await update.message.reply_text(f"❌ Pair {pair} is not available. Available pairs: {', '.join(self.available_pairs)}")
             return
@@ -233,12 +478,53 @@ Need help? Contact @your_support_username
             await update.message.reply_text("❌ Please start the bot first using /start")
             return
         
-        success = self.db.subscribe_user_to_pair(user_data['id'], pair)
+        success = self.db.remove_user_subscription(user_data['id'], pair)
         if success:
-            await update.message.reply_text(f"✅ Successfully subscribed to {pair} updates!")
+            await update.message.reply_text(
+                f"✅ **Successfully unsubscribed!**\n\n"
+                f"🪙 You will no longer receive updates for **{pair}**\n\n"
+                f"💡 Use `/subscribe {pair}` to re-subscribe anytime!",
+                parse_mode='Markdown'
+            )
         else:
-            await update.message.reply_text("❌ Error subscribing to pair. Please try again.")
+            await update.message.reply_text("❌ Error unsubscribing. You might not be subscribed to this pair.")
     
+    async def alerts_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /alerts command"""
+        user = update.effective_user
+        self.db.update_user_activity(user.id)
+        
+        user_data = self.db.get_user_by_telegram_id(user.id)
+        if not user_data:
+            await update.message.reply_text("❌ Please start the bot first using /start")
+            return
+        
+        alerts = self.db.get_user_alerts(user_data['id'])
+        
+        if not alerts:
+            message = """
+⚡ **No Active Alerts**
+
+You don't have any price alerts set up yet.
+
+**💡 Set your first alert:**
+`/setalert ICP/nICP price_up 5`
+
+This will notify you when ICP/nICP price increases by 5%!
+            """
+        else:
+            message = "⚡ **Your Active Alerts**\n\n"
+            for i, alert in enumerate(alerts, 1):
+                alert_desc = self.alert_types.get(alert['alert_type'], alert['alert_type'])
+                status = "🟢 Active" if alert.get('is_active', True) else "🔴 Inactive"
+                message += f"**{i}.** {alert['pair']}\n"
+                message += f"   📊 {alert_desc} ({alert['threshold']}%)\n"
+                message += f"   {status}\n\n"
+            
+            message += "💡 Use `/setalert` to add more alerts!"
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+
     async def set_alert_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /setalert command"""
         user = update.effective_user
@@ -256,6 +542,7 @@ Need help? Contact @your_support_username
             return
         
         pair = context.args[0].upper()
+        resolved_pair = self.resolve_pair_name(pair)
         alert_type = context.args[1].lower()
         try:
             threshold = float(context.args[2])
@@ -263,8 +550,8 @@ Need help? Contact @your_support_username
             await update.message.reply_text("❌ Invalid threshold value. Please enter a number.")
             return
         
-        if pair not in self.available_pairs:
-            await update.message.reply_text(f"❌ Pair {pair} is not available. Available pairs: {', '.join(self.available_pairs)}")
+        if resolved_pair not in self.available_pairs:
+            await update.message.reply_text(f"❌ Pair '{pair}' is not available. Available pairs: {', '.join(self.available_pairs)}")
             return
         
         if alert_type not in self.alert_types:
@@ -276,12 +563,13 @@ Need help? Contact @your_support_username
             await update.message.reply_text("❌ Please start the bot first using /start")
             return
         
-        success = self.db.add_user_alert(user_data['id'], pair, alert_type, threshold)
+        success = self.db.add_user_alert(user_data['id'], resolved_pair, alert_type, threshold)
         if success:
             alert_desc = self.alert_types[alert_type]
+            display_name = pair if pair != resolved_pair else resolved_pair
             await update.message.reply_text(
                 f"✅ **Alert set successfully!**\n\n"
-                f"🪙 **Pair:** {pair}\n"
+                f"🪙 **Pair:** {display_name}\n"
                 f"⚡ **Type:** {alert_desc}\n"
                 f"📊 **Threshold:** {threshold}%\n\n"
                 f"You'll be notified when this condition is met!",

@@ -15,7 +15,7 @@ from src.core import Database, APIClient, AlertSystem
 from src.bot import TelegramBot
 
 # Load environment variables
-load_dotenv('config/config.env.example')
+load_dotenv('config/config.env')
 
 # Setup logging
 def setup_logging():
