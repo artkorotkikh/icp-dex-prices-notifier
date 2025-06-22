@@ -1,315 +1,219 @@
 #!/usr/bin/env python3
+"""
+nICP Discount Tracker
+Tracks nICP/ICP discount opportunities across DEXes
+"""
 
-import os
-import sys
 import asyncio
 import logging
-import schedule
+import os
+import sys
+import signal
 import time
 from datetime import datetime
-from threading import Thread
-from dotenv import load_dotenv
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
 
-# Import our modules
-from src.core import Database, APIClient, AlertSystem
-from src.bot import TelegramBot
+# Load environment variables from config file
+def load_config():
+    """Load environment variables from config/config.env file"""
+    config_path = os.path.join(os.path.dirname(__file__), 'config', 'config.env')
+    if os.path.exists(config_path):
+        with open(config_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    # Remove quotes if present
+                    value = value.strip().strip('"').strip("'")
+                    os.environ[key.strip()] = value
+        print(f"✅ Loaded configuration from {config_path}")
+    else:
+        print(f"⚠️  Config file not found: {config_path}")
 
-# Load environment variables
-load_dotenv('config/config.env')
+# Load config before importing other modules
+load_config()
 
-# Setup logging
-def setup_logging():
-    """Setup logging configuration"""
-    log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
-    log_file = os.getenv('LOG_FILE', './logs/icp_monitor.log')
-    
-    # Create logs directory if it doesn't exist
-    os.makedirs(os.path.dirname(log_file), exist_ok=True)
-    
-    # Configure logging
-    logging.basicConfig(
-        level=getattr(logging, log_level),
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
-    
-    # Reduce telegram logging noise
-    logging.getLogger('httpx').setLevel(logging.WARNING)
-    logging.getLogger('telegram').setLevel(logging.WARNING)
+# Add src to Python path
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
-class ICPMonitorApp:
+from src.core.nicp_arbitrage_client import NICPArbitrageClient
+from src.core.database import Database
+from src.bot.telegram_bot import TelegramBot
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('logs/nicp_arbitrage_bot.log'),
+        logging.StreamHandler()
+    ]
+)
+
+logger = logging.getLogger(__name__)
+
+class NICPArbitrageBot:
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
-        
-        # Load configuration
-        self.config = self.load_config()
+        # Load environment variables
+        self.telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
+        if not self.telegram_token:
+            raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
         
         # Initialize components
-        self.db = None
-        self.api_client = None
-        self.telegram_bot = None
-        self.alert_system = None
+        self.database = Database()
+        self.arbitrage_client = NICPArbitrageClient()
+        self.telegram_bot = TelegramBot(self.telegram_token, self.database)
         
-        # Background tasks
-        self.data_fetch_thread = None
-        self.scheduler_thread = None
+        # Scheduler for periodic tasks
+        self.scheduler = AsyncIOScheduler()
         self.running = False
-    
-    def load_config(self) -> dict:
-        """Load configuration from environment variables"""
-        config = {
-            'telegram_bot_token': os.getenv('TELEGRAM_BOT_TOKEN'),
-            'telegram_channel_id': os.getenv('TELEGRAM_CHANNEL_ID'),
-            'database_path': os.getenv('DATABASE_PATH', './data/icp_monitor.db'),
-            'icpswap_api_url': os.getenv('ICPSWAP_API_URL', 'https://uvevg-iyaaa-aaaak-ac27q-cai.raw.ic0.app/tickers'),
-            'kongswap_api_url': os.getenv('KONGSWAP_API_URL', 'https://api.kongswap.io'),
-            'default_price_threshold': float(os.getenv('DEFAULT_PRICE_THRESHOLD', 5.0)),
-            'alert_check_interval': int(os.getenv('ALERT_CHECK_INTERVAL', 60)),
-            'data_fetch_interval': int(os.getenv('DATA_FETCH_INTERVAL', 30)),
-            'monitored_pairs': os.getenv('MONITORED_PAIRS', 'ICP/nICP,ICP/USD').split(',')
-        }
         
-        # Validate required configuration
-        if not config['telegram_bot_token']:
-            raise ValueError("TELEGRAM_BOT_TOKEN is required")
-        
-        return config
-    
-    def initialize_components(self):
-        """Initialize all system components"""
+        # Setup signal handlers for graceful shutdown
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+
+    def _signal_handler(self, signum, frame):
+        """Handle shutdown signals"""
+        logger.info(f"Received signal {signum}, shutting down...")
+        self.running = False
+
+    async def update_arbitrage_data(self):
+        """Periodic task to update nICP arbitrage data"""
         try:
-            self.logger.info("Initializing ICP Monitor components...")
+            logger.info("🔍 Updating nICP arbitrage data...")
             
-            # Initialize database
-            self.db = Database(self.config['database_path'])
-            self.logger.info("Database initialized")
+            # Get arbitrage data
+            arbitrage_data = await self.arbitrage_client.get_nicp_arbitrage_data()
             
-            # Initialize API client
-            self.api_client = APIClient()
-            self.logger.info("API client initialized")
+            # Store in database (simplified for now)
+            timestamp = datetime.now()
+            opportunities = len(arbitrage_data.get('opportunities', []))
+            viable_opportunities = arbitrage_data['summary']['viable_opportunities']
+            best_profit = arbitrage_data['summary']['best_profit_6m']
             
-            # Initialize Telegram bot
-            self.telegram_bot = TelegramBot(
-                token=self.config['telegram_bot_token'],
-                db=self.db,
-                api_client=self.api_client
-            )
-            self.telegram_bot.setup_handlers()
-            self.logger.info("Telegram bot initialized")
+            logger.info(f"📊 Found {opportunities} opportunities, {viable_opportunities} viable, best: {best_profit:.1f}%")
             
-            # Initialize alert system
-            self.alert_system = AlertSystem(
-                db=self.db,
-                api_client=self.api_client,
-                telegram_bot=self.telegram_bot
-            )
-            self.logger.info("Alert system initialized")
-            
-            self.logger.info("All components initialized successfully")
+            # TODO: Store detailed data in database for historical tracking
+            # self.database.store_arbitrage_data(arbitrage_data)
             
         except Exception as e:
-            self.logger.error(f"Failed to initialize components: {e}")
-            raise
-    
-    def setup_scheduler(self):
-        """Setup scheduled tasks"""
+            logger.error(f"Error updating arbitrage data: {e}")
+
+    async def check_api_health(self):
+        """Check health of DEX APIs"""
         try:
-            # Data fetching schedule
-            schedule.every(self.config['data_fetch_interval']).seconds.do(self.fetch_and_store_data)
+            health = self.arbitrage_client.check_health()
+            status_symbols = {True: "✅", False: "❌"}
             
-            # Alert checking schedule
-            schedule.every(self.config['alert_check_interval']).seconds.do(self.run_alert_check)
+            health_status = ", ".join([
+                f"{dex}: {status_symbols[status]}" 
+                for dex, status in health.items()
+            ])
             
-            # Market updates schedule (every 30 minutes)
-            schedule.every(30).minutes.do(self.send_market_update)
-            
-            # Daily cleanup (at 2 AM)
-            schedule.every().day.at("02:00").do(self.daily_cleanup)
-            
-            # Health check (every 5 minutes)
-            schedule.every(5).minutes.do(self.health_check)
-            
-            self.logger.info("Scheduler setup complete")
+            logger.info(f"Health check - {health_status}")
             
         except Exception as e:
-            self.logger.error(f"Failed to setup scheduler: {e}")
-            raise
-    
-    def fetch_and_store_data(self):
-        """Fetch current price data and store in database"""
+            logger.error(f"Health check failed: {e}")
+
+    async def start(self):
+        """Start the nICP arbitrage bot"""
+        logger.info("🚀 Starting nICP Discount Tracker...")
+        
+        # Initialize database (already done in constructor)
+        # self.database.init_database()  # Already called in __init__
+        
+        # Start scheduler
+        logger.info("Starting scheduler...")
+        self.scheduler.add_job(
+            self.update_arbitrage_data,
+            IntervalTrigger(seconds=30),  # Update every 30 seconds
+            id='update_arbitrage_data',
+            replace_existing=True
+        )
+        
+        self.scheduler.add_job(
+            self.check_api_health,
+            IntervalTrigger(minutes=5),  # Health check every 5 minutes
+            id='health_check',
+            replace_existing=True
+        )
+        
+        self.scheduler.start()
+        logger.info("Scheduler started")
+        
+        # Run initial data fetch
+        logger.info("Running initial arbitrage data fetch...")
+        await self.update_arbitrage_data()
+        
+        # Start Telegram bot
+        logger.info("Starting Telegram bot...")
+        self.running = True
+        
+        # Start bot in background task
+        bot_task = asyncio.create_task(self.telegram_bot.start_bot())
+        
         try:
-            self.logger.debug("Fetching and storing price data...")
-            
-            # Get current prices
-            price_data = self.api_client.get_icp_prices()
-            
-            if not price_data:
-                self.logger.warning("No price data received")
-                return
-            
-            # Store each pair's data
-            stored_count = 0
-            for pair, data in price_data.items():
-                success = self.db.add_price_data(
-                    pair=pair,
-                    price=data['price'],
-                    volume_24h=data.get('volume_24h'),
-                    source=data.get('source', 'unknown'),
-                    raw_data=data.get('raw_data')
-                )
+            # Keep the main loop running
+            while self.running:
+                await asyncio.sleep(1)
                 
-                if success:
-                    stored_count += 1
-            
-            self.logger.info(f"Stored price data for {stored_count} pairs")
-            
-        except Exception as e:
-            self.logger.error(f"Error fetching and storing data: {e}")
-    
-    def run_alert_check(self):
-        """Run alert checking (wrapper for async function)"""
-        try:
-            asyncio.run(self.alert_system.check_all_alerts())
-        except Exception as e:
-            self.logger.error(f"Error running alert check: {e}")
-    
-    def send_market_update(self):
-        """Send market update to channel (wrapper for async function)"""
-        try:
-            if self.config['telegram_channel_id']:
-                asyncio.run(self.alert_system.send_market_updates(self.config['telegram_channel_id']))
-        except Exception as e:
-            self.logger.error(f"Error sending market update: {e}")
-    
-    def daily_cleanup(self):
-        """Run daily cleanup tasks"""
-        try:
-            self.logger.info("Running daily cleanup...")
-            
-            # Clean up old price data (keep 30 days)
-            self.db.cleanup_old_data(days=30)
-            
-            # Clean up alert system
-            asyncio.run(self.alert_system.cleanup_old_alerts())
-            
-            self.logger.info("Daily cleanup completed")
-            
-        except Exception as e:
-            self.logger.error(f"Error during daily cleanup: {e}")
-    
-    def health_check(self):
-        """Perform system health check"""
-        try:
-            # Check API health
-            health_status = self.api_client.health_check()
-            
-            # Log health status
-            icpswap_status = "✅" if health_status.get('icpswap') else "❌"
-            kongswap_status = "✅" if health_status.get('kongswap') else "❌"
-            
-            self.logger.info(f"Health check - ICPSwap: {icpswap_status}, KongSwap: {kongswap_status}")
-            
-            # If all APIs are down, this could trigger an admin alert
-            if not any(health_status.values()):
-                self.logger.warning("All APIs are down!")
-            
-        except Exception as e:
-            self.logger.error(f"Error during health check: {e}")
-    
-    def run_scheduler(self):
-        """Run the scheduler in a separate thread"""
-        self.logger.info("Starting scheduler thread...")
-        
-        while self.running:
-            try:
-                schedule.run_pending()
-                time.sleep(1)
-            except Exception as e:
-                self.logger.error(f"Error in scheduler: {e}")
-                time.sleep(5)  # Wait before retrying
-    
-    def start(self):
-        """Start the ICP Monitor application"""
-        try:
-            self.logger.info("🚀 Starting ICP Token Monitor...")
-            
-            # Initialize components
-            self.initialize_components()
-            
-            # Setup scheduler
-            self.setup_scheduler()
-            
-            # Set running flag
-            self.running = True
-            
-            # Start scheduler in background thread
-            self.scheduler_thread = Thread(target=self.run_scheduler, daemon=True)
-            self.scheduler_thread.start()
-            
-            # Run initial data fetch
-            self.logger.info("Running initial data fetch...")
-            self.fetch_and_store_data()
-            
-            # Start telegram bot (this will block)
-            self.logger.info("Starting Telegram bot...")
-            self.telegram_bot.run()
-            
         except KeyboardInterrupt:
-            self.logger.info("Received interrupt signal")
-            self.stop()
+            logger.info("Received keyboard interrupt")
+        finally:
+            await self.shutdown()
+
+    async def shutdown(self):
+        """Graceful shutdown"""
+        logger.info("�� Shutting down nICP Discount Tracker...")
+        
+        # Stop scheduler
+        if self.scheduler.running:
+            self.scheduler.shutdown()
+            logger.info("Scheduler stopped")
+        
+        # Stop Telegram bot
+        try:
+            await self.telegram_bot.stop_bot()
+            logger.info("Telegram bot stopped")
         except Exception as e:
-            self.logger.error(f"Fatal error: {e}")
-            self.stop()
-            sys.exit(1)
-    
-    def stop(self):
-        """Stop the application gracefully"""
-        self.logger.info("🛑 Stopping ICP Token Monitor...")
+            logger.error(f"Error stopping Telegram bot: {e}")
         
-        self.running = False
+        # Close database connection
+        self.database.close()
+        logger.info("Database connection closed")
         
-        # Wait for scheduler thread to finish
-        if self.scheduler_thread and self.scheduler_thread.is_alive():
-            self.scheduler_thread.join(timeout=5)
-        
-        self.logger.info("ICP Token Monitor stopped")
+        logger.info("✅ Shutdown complete")
 
-def print_banner():
-    """Print application banner"""
-    banner = """
-    ╔══════════════════════════════════════════════════════════════╗
-    ║                                                              ║
-    ║               🚀 ICP TOKEN MONITOR MVP 🚀                    ║
-    ║                                                              ║
-    ║    Real-time ICP price monitoring for Raspberry Pi          ║
-    ║    • ICPSwap & KongSwap integration                          ║
-    ║    • Telegram bot & alerts                                   ║
-    ║    • SQLite database                                         ║
-    ║    • Community features                                      ║
-    ║                                                              ║
-    ╚══════════════════════════════════════════════════════════════╝
-    """
-    print(banner)
-
-def main():
+async def main():
     """Main entry point"""
-    print_banner()
-    
-    # Setup logging
-    setup_logging()
-    logger = logging.getLogger(__name__)
-    
     try:
-        # Create and start the application
-        app = ICPMonitorApp()
-        app.start()
+        # Create and start the bot
+        bot = NICPArbitrageBot()
+        await bot.start()
         
+    except KeyboardInterrupt:
+        logger.info("Interrupted by user")
     except Exception as e:
-        logger.error(f"Failed to start application: {e}")
+        logger.error(f"Fatal error: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
-    main() 
+    # Ensure logs directory exists
+    os.makedirs('logs', exist_ok=True)
+    
+    # Check for required environment variables
+    if not os.getenv('TELEGRAM_BOT_TOKEN'):
+        print("❌ Error: TELEGRAM_BOT_TOKEN environment variable is required")
+        print("💡 Set it with: export TELEGRAM_BOT_TOKEN='your_bot_token_here'")
+        sys.exit(1)
+    
+    print("🚀 nICP Discount Tracker")
+    print("========================================")
+    print("🎯 Tracking nICP/ICP discount opportunities")
+    print("📊 Checking KongSwap and other DEXes")
+    print("🤖 Telegram bot ready for user commands")
+    print("========================================")
+    
+    # Run the bot
+    asyncio.run(main()) 

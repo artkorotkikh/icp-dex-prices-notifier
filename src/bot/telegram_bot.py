@@ -1,763 +1,606 @@
 import logging
-import os
-from datetime import datetime
-from typing import Dict, List
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-from ..core import Database, APIClient
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.constants import ParseMode
+import json
+from datetime import datetime
+import os
+import sys
+from typing import List
+
+# Add project root to path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from src.core.nicp_arbitrage_client import NICPArbitrageClient
+from src.core.database import Database
 
 logger = logging.getLogger(__name__)
 
 class TelegramBot:
-    def __init__(self, token: str, db: Database, api_client: APIClient):
+    def __init__(self, token: str, database: Database):
         self.token = token
-        self.db = db
-        self.api_client = api_client
+        self.database = database
+        self.arbitrage_client = NICPArbitrageClient()
         self.application = None
         
-        # Available trading pairs (dynamically updated from API)
-        self.available_pairs = ['NICP/ICP', 'CKUSDT/ICP', 'CKUSDC/ICP']
-        
-        # Pair aliases for user-friendly input
-        self.pair_aliases = {
-            'ICP/NICP': 'NICP/ICP',
-            'ICP/nICP': 'NICP/ICP', 
-            'ICP/USDT': 'CKUSDT/ICP',
-            'ICP/USDC': 'CKUSDC/ICP',
-            'ICP/ckUSDT': 'ICP/ckUSDT',
-            'ICP/ckUSDC': 'ckUSDC/ckUSDT',
-            'NICP/ICP': 'NICP/ICP',
-            'CKUSDT/ICP': 'CKUSDT/ICP',
-            'CKUSDC/ICP': 'CKUSDC/ICP'
-        }
-        
-        # Alert types
-        self.alert_types = {
-            'price_up': 'Price increase',
-            'price_down': 'Price decrease',
-            'volume_spike': 'Volume spike'
-        }
-    
-    def setup_handlers(self):
-        """Setup all command and callback handlers"""
-        if not self.application:
-            self.application = Application.builder().token(self.token).build()
-        
-        # Command handlers
-        self.application.add_handler(CommandHandler("start", self.start_command))
-        self.application.add_handler(CommandHandler("help", self.help_command))
-        self.application.add_handler(CommandHandler("price", self.price_command))
-        self.application.add_handler(CommandHandler("subscribe", self.subscribe_command))
-        self.application.add_handler(CommandHandler("unsubscribe", self.unsubscribe_command))
-        self.application.add_handler(CommandHandler("alerts", self.alerts_command))
-        self.application.add_handler(CommandHandler("setalert", self.set_alert_command))
-        self.application.add_handler(CommandHandler("portfolio", self.portfolio_command))
-        self.application.add_handler(CommandHandler("referral", self.referral_command))
-        self.application.add_handler(CommandHandler("stats", self.stats_command))
-        self.application.add_handler(CommandHandler("status", self.status_command))
-        
-        # Callback query handlers
-        self.application.add_handler(CallbackQueryHandler(self.button_callback))
-        
-        # Message handlers
-        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
-        
-        logger.info("Telegram bot handlers setup complete")
-    
-    def update_available_pairs(self):
-        """Update available pairs from API client"""
-        try:
-            price_data = self.api_client.get_icp_prices()
-            if price_data:
-                self.available_pairs = list(price_data.keys())
-                logger.info(f"Updated available pairs: {len(self.available_pairs)} pairs")
-        except Exception as e:
-            logger.error(f"Error updating available pairs: {e}")
-
-    def resolve_pair_name(self, user_input: str) -> str:
-        """Resolve user input to actual pair name, preferring higher volume pairs"""
-        user_input = user_input.upper().strip()
-        
-        # Update available pairs from API
-        self.update_available_pairs()
-        
-        # Get current price data for volume comparison
-        try:
-            price_data = self.api_client.get_icp_prices()
-        except:
-            price_data = {}
-        
-        # Check if it's already a valid pair
-        if user_input in self.available_pairs:
-            return user_input
-            
-        # Check aliases
-        if user_input in self.pair_aliases:
-            return self.pair_aliases[user_input]
-        
-        # Smart resolution: find all matching pairs and prefer higher volume
-        matching_pairs = []
-        
-        # Parse user input
-        if '/' in user_input:
-            user_parts = user_input.split('/')
-            if len(user_parts) == 2:
-                token1, token2 = user_parts
-                
-                # Look for exact matches and reverse matches
-                for pair_name in self.available_pairs:
-                    if '/' in pair_name:
-                        pair_parts = pair_name.split('/')
-                        if len(pair_parts) == 2:
-                            p1, p2 = pair_parts
-                            
-                            # Normalize tokens for comparison
-                            def normalize_token(token):
-                                return token.replace('NICP', 'nICP').replace('CKUSDT', 'USDT').replace('CKUSDC', 'USDC')
-                            
-                            norm_user1, norm_user2 = normalize_token(token1), normalize_token(token2)
-                            norm_p1, norm_p2 = normalize_token(p1), normalize_token(p2)
-                            
-                            # Check for matches (both directions)
-                            if (norm_user1 == norm_p1 and norm_user2 == norm_p2) or \
-                               (norm_user1 == norm_p2 and norm_user2 == norm_p1):
-                                volume = price_data.get(pair_name, {}).get('volume_24h_usd', 0)
-                                matching_pairs.append((pair_name, volume))
-        
-        # If we found matching pairs, return the one with highest volume
-        if matching_pairs:
-            matching_pairs.sort(key=lambda x: x[1], reverse=True)  # Sort by volume desc
-            return matching_pairs[0][0]  # Return highest volume pair
-        
-        # Try some common variations
-        variations = [
-            user_input,
-            user_input.replace('NICP', 'nICP'),
-            user_input.replace('nICP', 'NICP'),
-            user_input.replace('/', '_'),
-            user_input.replace('_', '/'),
-            user_input.replace('CK', 'ck'),
-            user_input.replace('ck', 'CK'),
-            user_input.replace('USDT', 'ckUSDT'),
-            user_input.replace('USDC', 'ckUSDC')
-        ]
-        
-        for variation in variations:
-            if variation in self.pair_aliases:
-                return self.pair_aliases[variation]
-            if variation in self.available_pairs:
-                return variation
-                
-        return user_input  # Return original if no match found
-    
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /start command"""
-        user = update.effective_user
+        """Handle /start command with nICP discount focus"""
+        user_id = update.effective_user.id
+        username = update.effective_user.username or "Unknown"
         
-        # Add user to database
-        user_id = self.db.add_user(
-            telegram_id=user.id,
-            username=user.username,
-            first_name=user.first_name,
-            last_name=user.last_name
+        # Store user in database
+        self.database.add_user(user_id, username)
+        
+        welcome_text = f"""
+🚀 **Welcome to nICP Discount Tracker!**
+
+💰 **What is nICP?**
+nICP is staked ICP that unlocks after 6 months. When nICP trades below ICP price, it creates a discount opportunity!
+
+🎯 **Key Commands:**
+• `/start` - Show this welcome message
+• `/help` - Show all commands and features
+• `/discount` - Check current discount opportunities
+• `/status` - Bot health and API status
+
+🔥 **Coming Soon:**
+• Price alerts when discounts exceed thresholds
+• Historical discount tracking
+• More discount opportunities across ICP ecosystem!
+
+Ready to find nICP discounts? Try `/discount` to see live data! 🚀
+"""
+        
+        keyboard = [
+            [InlineKeyboardButton("🎯 Check Discounts", callback_data="discount")],
+            [InlineKeyboardButton("📚 Learn More", callback_data="explain")],
+            [InlineKeyboardButton("🧮 Calculator", callback_data="calculator")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            welcome_text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
         )
+
+    async def show_discount_opportunities(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show current nICP discount opportunities with clear comparison"""
+        try:
+            logger.info("💰 User requested discount opportunities")
+            
+            # Send initial "fetching" message
+            loading_msg = await update.message.reply_text(
+                "🔍 **Analyzing nICP discount opportunities...**\n"
+                "📊 Checking live prices across DEXes\n"
+                "🌊 Fetching WaterNeuron exchange rates\n"
+                "⏳ Please wait a moment...",
+                parse_mode='Markdown'
+            )
+            
+            # Get arbitrage data
+            arbitrage_data = await self.arbitrage_client.get_nicp_arbitrage_data()
+            
+            if not arbitrage_data or not arbitrage_data.get('opportunities'):
+                await loading_msg.edit_text(
+                    "❌ **No Data Available**\n\n"
+                    "Could not fetch nICP price data from DEXes.\n"
+                    "Please try again in a few minutes.\n\n"
+                    "💡 Use /status to check API health.",
+                    parse_mode='Markdown'
+                )
+                return
+            
+            # Build comprehensive message
+            message_parts = []
+            
+            # Header with WaterNeuron status
+            waterneuron_data = arbitrage_data.get('waterneuron_data')
+            if waterneuron_data and waterneuron_data.get('success'):
+                wn_status = "✅ Live WaterNeuron data"
+                exchange_rate = waterneuron_data.get('nicp_to_icp_rate', 0.9001)
+            else:
+                wn_status = "⚠️ Using fallback rates"
+                exchange_rate = 0.9001
+            
+            message_parts.append(f"🎯 **nICP Discount Opportunities**")
+            message_parts.append(f"🌊 {wn_status}")
+            message_parts.append(f"📅 Current exchange rate: 1 ICP = {exchange_rate:.4f} nICP")
+            message_parts.append("")
+            
+            # Show direct staking option first for comparison
+            message_parts.append("🏛️ **Direct WaterNeuron Staking**")
+            message_parts.append(f"• Exchange: 1,000 ICP → {1000 * exchange_rate:.1f} nICP")
+            message_parts.append(f"• After 6 months: {1000 * exchange_rate:.1f} nICP → {1000:.1f} ICP")
+            # Direct staking gives you the same ICP back after 6 months, so 0% profit
+            # But we should show the comparison properly
+            message_parts.append(f"• **Result: Break-even (0% profit, 0% APY)**")
+            message_parts.append("• ⏱️ 6-month lockup period")
+            message_parts.append("• 💡 This is the baseline to compare against")
+            message_parts.append("")
+            
+            # Show DEX opportunities
+            opportunities = arbitrage_data.get('opportunities', [])
+            viable_opportunities = [opp for opp in opportunities if opp.get('arbitrage', {}).get('viable', False)]
+            
+            if viable_opportunities:
+                message_parts.append("🚀 **DEX Discount Opportunities**")
+                message_parts.append("*(Better than direct staking!)*")
+                message_parts.append("")
+                
+                # Sort by profit percentage
+                viable_opportunities.sort(key=lambda x: x['arbitrage']['profit_percentage_6m'], reverse=True)
+                
+                for i, opp in enumerate(viable_opportunities, 1):
+                    dex_name = opp.get('dex', 'Unknown')
+                    price = opp.get('nicp_price_in_icp', 0)
+                    arbitrage = opp.get('arbitrage', {})
+                    
+                    # Safety check for valid price
+                    if price <= 0:
+                        logger.warning(f"Invalid price for {dex_name}: {price}")
+                        continue
+                    
+                    profit_6m = arbitrage.get('profit_percentage_6m', 0)
+                    apy = arbitrage.get('annualized_return', 0)
+                    
+                    # Calculate example with 1000 ICP - with safety checks
+                    try:
+                        nicp_bought = 1000 / price
+                        future_icp = nicp_bought / exchange_rate if exchange_rate > 0 else nicp_bought
+                        profit_icp = future_icp - 1000
+                    except (ZeroDivisionError, TypeError) as e:
+                        logger.error(f"Error calculating profits for {dex_name}: {e}")
+                        continue
+                    
+                    # Determine emoji based on profit level
+                    if profit_6m >= 20:
+                        emoji = "🚀"
+                    elif profit_6m >= 15:
+                        emoji = "🔥"
+                    elif profit_6m >= 10:
+                        emoji = "✅"
+                    else:
+                        emoji = "💡"
+                    
+                    message_parts.append(f"{emoji} **#{i}. {dex_name}**")
+                    message_parts.append(f"• Price: {price:.6f} ICP per nICP")
+                    message_parts.append(f"• Exchange: 1,000 ICP → {nicp_bought:.1f} nICP")
+                    message_parts.append(f"• After 6 months: {nicp_bought:.1f} nICP → {future_icp:.1f} ICP")
+                    message_parts.append(f"• **Profit: {profit_icp:.1f} ICP ({profit_6m:.1f}% / {apy:.1f}% APY)**")
+                    
+                    # Compare to direct staking
+                    extra_profit = profit_icp - 0
+                    if extra_profit > 0:
+                        message_parts.append(f"• 💰 **+{extra_profit:.1f} ICP more than direct staking!**")
+                    
+                    message_parts.append("")
+                
+                # Summary
+                best_opp = viable_opportunities[0]
+                best_profit = best_opp['arbitrage']['profit_percentage_6m']
+                best_dex = best_opp.get('dex', 'Unknown')
+                
+                message_parts.append("📊 **Summary**")
+                message_parts.append(f"• {len(viable_opportunities)} discount opportunities found")
+                message_parts.append(f"• Best: {best_dex} with {best_profit:.1f}% profit")
+                message_parts.append(f"• All opportunities beat direct staking!")
+                
+            else:
+                message_parts.append("❌ **No DEX Discounts Available**")
+                message_parts.append("Currently, nICP is trading at or above fair value on DEXes.")
+                message_parts.append("")
+                message_parts.append("💡 **Recommendation:** Consider direct WaterNeuron staking")
+                message_parts.append("or wait for better DEX prices.")
+            
+            message_parts.append("")
+            message_parts.append("⚠️ **Important Notes:**")
+            message_parts.append("• 6-month lockup period for all options")
+            message_parts.append("• Prices change constantly - act quickly!")
+            message_parts.append("• Consider gas fees and slippage")
+            message_parts.append("• This is not financial advice")
+            
+            message_parts.append("")
+            message_parts.append("🔄 Use /discount for updated prices")
+            message_parts.append("📈 Use /status for system health")
+            
+            # Send the complete message
+            full_message = "\n".join(message_parts)
+            
+            # Split if too long (Telegram limit ~4096 chars)
+            if len(full_message) > 4000:
+                # Send in parts
+                parts = self._split_long_message(message_parts)
+                await loading_msg.edit_text(parts[0], parse_mode='Markdown')
+                for part in parts[1:]:
+                    await update.message.reply_text(part, parse_mode='Markdown')
+            else:
+                await loading_msg.edit_text(full_message, parse_mode='Markdown')
+                
+        except Exception as e:
+            logger.error(f"Error showing discount opportunities: {e}")
+            error_msg = (
+                "❌ **Error fetching discount data**\n\n"
+                f"Technical details: {str(e)}\n\n"
+                "Please try again in a few minutes or use /status to check system health."
+            )
+            
+            try:
+                await loading_msg.edit_text(error_msg, parse_mode='Markdown')
+            except:
+                await update.message.reply_text(error_msg, parse_mode='Markdown')
+
+    def _split_long_message(self, message_parts: List[str]) -> List[str]:
+        """Split a long message into multiple parts for Telegram"""
+        parts = []
+        current_part = []
+        current_length = 0
         
-        if user_id:
-            # Get user stats for referral code
-            user_data = self.db.get_user_by_telegram_id(user.id)
-            referral_code = user_data.get('referral_code', '') if user_data else ''
+        for line in message_parts:
+            line_length = len(line) + 1  # +1 for newline
             
-            welcome_message = f"""
-🚀 **Welcome to ICP Token Monitor!** 🚀
+            if current_length + line_length > 4000:
+                # Start a new part
+                if current_part:
+                    parts.append("\n".join(current_part))
+                current_part = [line]
+                current_length = line_length
+            else:
+                current_part.append(line)
+                current_length += line_length
+        
+        # Add the last part
+        if current_part:
+            parts.append("\n".join(current_part))
+        
+        return parts
 
-Hi {user.first_name}! I'm your personal ICP price monitoring assistant.
+    async def explain_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Explain nICP discount in detail"""
+        explanation = """
+📚 **nICP Discount Explained**
 
-**🎯 What I can do:**
-• 📊 Real-time price updates for ICP pairs
-• ⚡ Custom price alerts
-• 📈 24h price changes and volume data
-• 🔔 Subscribe to your favorite pairs
-• 📱 Community features and referrals
+🔵 **What is nICP?**
+• nICP = "neuron ICP" - staked ICP tokens
+• When you stake ICP, you get nICP tokens
+• nICP can be dissolved back to ICP after 6 months
+• Direct staking rate: 1 ICP = 0.9001103 nICP
 
-**🎮 Your Referral Code:** `{referral_code}`
-Share this code with friends to earn rewards!
+💰 **The Discount Opportunity:**
 
-**🚀 Quick Start:**
-1. Use /price to check current prices
-2. Use /subscribe ICP/nICP to get updates
-3. Use /setalert to set price alerts
+**DEX Discount:**
+• Buy 1 nICP on DEX for ~0.979 ICP
+• Immediately unstake → Start 6-month dissolution
+• After 6 months: Get 1.111 ICP
+• Net result: 13.5% gain in 6 months!
 
-Type /help for all commands or choose an option below:
-            """
-            
-            keyboard = [
-                [InlineKeyboardButton("📊 Check Prices", callback_data="quick_prices")],
-                [InlineKeyboardButton("🔔 Subscribe to Pairs", callback_data="quick_subscribe")],
-                [InlineKeyboardButton("⚡ Set Alert", callback_data="quick_alert")],
-                [InlineKeyboardButton("📱 Help", callback_data="help")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await update.message.reply_text(welcome_message, reply_markup=reply_markup, parse_mode='Markdown')
-        else:
-            await update.message.reply_text("❌ Error setting up your account. Please try again.")
-    
+🎯 **Why Does This Work?**
+• DEX prices aren't always efficient
+• Many don't understand nICP mechanics
+• Low liquidity creates pricing gaps
+• You're providing liquidity to earn returns
+
+⚠️ **Important Considerations:**
+• **6-month lock-up:** Your ICP is locked during dissolution
+• **ICP price risk:** ICP value may fluctuate during 6 months
+• **Liquidity risk:** nICP pairs may have low volume
+• **Opportunity cost:** Could ICP gain more than discount profit?
+
+🚀 **Getting Started:**
+1. Have ICP in a wallet (Plug, Stoic, etc.)
+2. Go to KongSwap or ICPSwap
+3. Buy nICP with ICP at current market rate
+4. Use NNS app to start dissolution process
+5. Wait 6 months and collect profits!
+
+💡 **Pro Tips:**
+• Monitor this bot for best opportunities
+• Consider dollar-cost averaging into positions
+• Don't invest more than you can lock up for 6 months
+• Keep some ICP liquid for other opportunities
+
+Ready to check current opportunities? Use `/discount`! 🎯
+        """
+        
+        keyboard = [
+            [InlineKeyboardButton("🎯 Check Current Opportunity", callback_data="discount")],
+            [InlineKeyboardButton("🧮 Profit Calculator", callback_data="calculator")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            explanation,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+
+    async def calculator_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Interactive profit calculator"""
+        calculator_msg = """
+🧮 **nICP Discount Calculator**
+
+💰 **Example Calculations:**
+
+**Investment: 100 ICP**
+• Buy nICP at 0.979 ICP each
+• Get: 102.14 nICP tokens
+• After 6 months: 113.47 ICP
+• **Profit: 13.47 ICP (13.5%)**
+
+**Investment: 1,000 ICP**
+• Buy nICP at 0.979 ICP each
+• Get: 1,021.4 nICP tokens
+• After 6 months: 1,134.7 ICP
+• **Profit: 134.7 ICP (13.5%)**
+
+**Investment: 10,000 ICP**
+• Buy nICP at 0.979 ICP each
+• Get: 10,214 nICP tokens
+• After 6 months: 11,347 ICP
+• **Profit: 1,347 ICP (13.5%)**
+
+📊 **Key Metrics:**
+• Current nICP price: ~0.979 ICP
+• Dissolution value: 1.111 ICP per nICP
+• Profit per nICP: 0.132 ICP (13.5%)
+• Annualized return: ~27% APY
+• Lock-up period: 6 months
+
+💡 **Custom Calculation:**
+Profit = (Investment ÷ nICP_Price) × (1.111 - nICP_Price)
+
+Want to see live opportunities? Use `/discount`! 🎯
+        """
+        
+        keyboard = [
+            [InlineKeyboardButton("🎯 Live Opportunities", callback_data="discount")],
+            [InlineKeyboardButton("📚 Learn More", callback_data="explain")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            calculator_msg,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /help command"""
-        help_text = """
-🤖 **ICP Token Monitor - Commands** 🤖
+        """Show help message"""
+        help_text = f"""
+🤖 **nICP Discount Tracker - Commands**
 
-**📊 Price Commands:**
-• `/price [pair]` - Get current price (e.g., /price ICP/nICP)
-• `/subscribe [pair]` - Subscribe to pair updates
-• `/unsubscribe [pair]` - Unsubscribe from pair
-
-**⚡ Alert Commands:**
-• `/setalert [pair] [type] [threshold]` - Set price alert
-• `/alerts` - View your active alerts
-• `/portfolio` - View your subscriptions
-
-**👥 Community Commands:**
-• `/referral` - Get your referral link
-• `/stats` - View your account stats
-
-**🔧 System Commands:**
-• `/status` - Check bot status
+📊 **Main Commands:**
+• `/start` - Welcome message and overview
+• `/discount` - Check current discount opportunities  
+• `/status` - Bot and API health status
 • `/help` - Show this help message
 
-**📈 Available Pairs:**
-• NICP/ICP - Neuron ICP to ICP (liquid staking)
-• CKUSDT/ICP - Chain Key USDT to ICP 
-• CKUSDC/ICP - Chain Key USDC to ICP
+🔍 **What This Bot Does:**
+• Monitors nICP prices across DEXes
+• Calculates real-time discount opportunities
+• Shows potential profits and APY
+• Tracks WaterNeuron exchange rates
 
-**🔄 You can also use these formats:**
-• ICP/nICP → NICP/ICP
-• ICP/USDT → CKUSDT/ICP  
-• ICP/USDC → CKUSDC/ICP
+💰 **Features:**
+• Live price data from ICPSwap & KongSwap
+• More discount opportunities across ICP ecosystem
+• Real-time discount calculations
+• 6-month APY projections
 
-**⚡ Alert Types:**
-• `price_up` - Price increase alert
-• `price_down` - Price decrease alert
-• `volume_spike` - Volume spike alert
+💡 **Pro Tips:**
+• Check `/discount` regularly for best opportunities
+• Consider the 6-month lock-up period
+• Factor in market volatility risks
 
-**💡 Examples:**
-• `/price ICP/nICP` - Get ICP/nICP price
-• `/subscribe ICP/USD` - Subscribe to ICP/USD updates
-• `/setalert ICP/nICP price_up 5` - Alert when ICP/nICP rises 5%
+Ready to explore nICP discounts? Use `/discount` to see current opportunities! 🚀
+"""
+        
+        await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
 
-Need help? Contact @your_support_username
-        """
-        
-        await update.message.reply_text(help_text, parse_mode='Markdown')
-    
-    async def price_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /price command"""
-        user = update.effective_user
-        self.db.update_user_activity(user.id)
-        
-        # Get specific pair if provided
-        pair = None
-        if context.args:
-            pair = context.args[0].upper()
-            if '/' not in pair:
-                await update.message.reply_text("❌ Invalid pair format. Use format like: ICP/nICP")
-                return
-        
-        try:
-            await update.message.reply_text("📊 Fetching current prices...")
-            
-            # Get price data
-            price_data = self.api_client.get_icp_prices()
-            
-            if not price_data:
-                await update.message.reply_text("❌ Unable to fetch price data. Please try again later.")
-                return
-            
-            if pair:
-                # Find all matching pairs (not just the highest volume one)
-                matching_pairs = []
-                
-                if '/' in pair:
-                    user_parts = pair.split('/')
-                    if len(user_parts) == 2:
-                        token1, token2 = user_parts
-                        
-                        # Look for exact matches and reverse matches
-                        for pair_name in price_data.keys():
-                            if '/' in pair_name:
-                                pair_parts = pair_name.split('/')
-                                if len(pair_parts) == 2:
-                                    p1, p2 = pair_parts
-                                    
-                                    # Normalize tokens for comparison
-                                    def normalize_token(token):
-                                        return token.replace('NICP', 'nICP').replace('CKUSDT', 'USDT').replace('CKUSDC', 'USDC')
-                                    
-                                    norm_user1, norm_user2 = normalize_token(token1), normalize_token(token2)
-                                    norm_p1, norm_p2 = normalize_token(p1), normalize_token(p2)
-                                    
-                                    # Check for matches (both directions)
-                                    if (norm_user1 == norm_p1 and norm_user2 == norm_p2) or \
-                                       (norm_user1 == norm_p2 and norm_user2 == norm_p1):
-                                        volume = price_data.get(pair_name, {}).get('volume_24h_usd', 0)
-                                        matching_pairs.append((pair_name, volume))
-                
-                # If no matches found, try direct lookup
-                if not matching_pairs:
-                    resolved_pair = self.resolve_pair_name(pair)
-                    if resolved_pair in price_data:
-                        volume = price_data.get(resolved_pair, {}).get('volume_24h_usd', 0)
-                        matching_pairs.append((resolved_pair, volume))
-                
-                if matching_pairs:
-                    # Sort by volume (highest first)
-                    matching_pairs.sort(key=lambda x: x[1], reverse=True)
-                    
-                    if len(matching_pairs) == 1:
-                        # Single match - show detailed info
-                        pair_name = matching_pairs[0][0]
-                        pair_info = price_data[pair_name]
-                        price_change = self.db.get_price_change(pair_name, 24)
-                        change_text = f"📈 +{price_change:.2f}%" if price_change and price_change > 0 else f"📉 {price_change:.2f}%" if price_change else "➡️ No change data"
-                        
-                        # Get source info
-                        source = pair_info.get('source', 'unknown').title()
-                        source_emoji = "🏪" if source.lower() == 'icpswap' else "🦍" if source.lower() == 'kongswap' else "📡"
-                        
-                        message = f"""
-🪙 **{pair_name}** 
-
-{self.api_client.format_price_data(pair_info)}
-📈 **24h Change:** {change_text}
-{source_emoji} **Source:** {source}
-🕒 **Last updated:** {datetime.now().strftime('%H:%M:%S')}
-                        """
-                        await update.message.reply_text(message, parse_mode='Markdown')
-                    else:
-                        # Multiple matches - show comparison
-                        message = f"🪙 **{pair}** - Found {len(matching_pairs)} matches:\n\n"
-                        
-                        for i, (pair_name, volume) in enumerate(matching_pairs[:3], 1):  # Show top 3
-                            pair_info = price_data[pair_name]
-                            source = pair_info.get('source', 'unknown').lower()
-                            source_emoji = "🏪" if source == "icpswap" else "🦍" if source == "kongswap" else "📡"
-                            source_name = source.title()
-                            
-                            price = pair_info.get('price', 0)
-                            volume_24h = pair_info.get('volume_24h_usd', 0)
-                            
-                            # Format volume nicely
-                            if volume_24h >= 1000000:
-                                volume_str = f"${volume_24h/1000000:.1f}M"
-                            elif volume_24h >= 1000:
-                                volume_str = f"${volume_24h/1000:.1f}K"
-                            else:
-                                volume_str = f"${volume_24h:.0f}"
-                            
-                            message += f"**{i}. {pair_name}** {source_emoji}\n"
-                            message += f"   💰 ${price:.6f}\n"
-                            message += f"   📊 {volume_str} volume\n"
-                            message += f"   🔗 {source_name}\n\n"
-                        
-                        message += f"🕒 **Last updated:** {datetime.now().strftime('%H:%M:%S')}"
-                        await update.message.reply_text(message, parse_mode='Markdown')
-                else:
-                    # Show available pairs in error message
-                    available_list = "\n".join([f"• {p}" for p in self.available_pairs])
-                    user_friendly_list = "\n".join([f"• {alias} (→ {actual})" for alias, actual in self.pair_aliases.items() if alias != actual])
-                    
-                    await update.message.reply_text(
-                        f"❌ Pair '{pair}' not found.\n\n"
-                        f"**Available pairs:**\n{available_list}\n\n"
-                        f"**You can also use:**\n{user_friendly_list}",
-                        parse_mode='Markdown'
-                    )
-            else:
-                # Show all available pairs (limit to top 10 by volume for readability)
-                sorted_pairs = sorted(price_data.items(), key=lambda x: x[1].get('volume_24h_usd', 0), reverse=True)
-                top_pairs = sorted_pairs[:10]
-                
-                message = "📊 **Top 10 ICP Pairs by Volume:**\n\n"
-                
-                for i, (pair_name, pair_info) in enumerate(top_pairs, 1):
-                    price_change = self.db.get_price_change(pair_name, 24)
-                    change_emoji = "📈" if price_change and price_change > 0 else "📉" if price_change and price_change < 0 else "➡️"
-                    change_text = f"{price_change:+.2f}%" if price_change else "N/A"
-                    
-                    # Format volume nicely
-                    volume_usd = pair_info.get('volume_24h_usd', 0)
-                    if volume_usd >= 1000000:
-                        volume_str = f"${volume_usd/1000000:.1f}M"
-                    elif volume_usd >= 1000:
-                        volume_str = f"${volume_usd/1000:.1f}K"
-                    else:
-                        volume_str = f"${volume_usd:.0f}"
-                    
-                    # Get source emoji
-                    source = pair_info.get('source', 'unknown').lower()
-                    source_emoji = "🏪" if source == 'icpswap' else "🦍" if source == 'kongswap' else "📡"
-                    
-                    message += f"{i:2d}. **{pair_name}** {source_emoji}\n"
-                    message += f"    💰 ${pair_info['price']:.6f} {change_emoji} {change_text}\n"
-                    message += f"    📊 Vol: {volume_str} | 💧 Liq: ${pair_info.get('liquidity_usd', 0)/1000:.0f}K\n\n"
-                
-                # Count sources
-                icpswap_count = sum(1 for _, p in price_data.items() if p.get('source', '').lower() == 'icpswap')
-                kongswap_count = sum(1 for _, p in price_data.items() if p.get('source', '').lower() == 'kongswap')
-                
-                message += f"🕒 **Last updated:** {datetime.now().strftime('%H:%M:%S')}\n"
-                message += f"📊 **Total pairs:** {len(price_data)} (🏪 {icpswap_count} ICPSwap, 🦍 {kongswap_count} KongSwap)\n"
-                message += f"💡 *Use `/price [pair]` for detailed info*"
-                await update.message.reply_text(message, parse_mode='Markdown')
-        
-        except Exception as e:
-            logger.error(f"Error in price command: {e}")
-            await update.message.reply_text("❌ Error fetching price data. Please try again.")
-    
-    async def subscribe_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /subscribe command"""
-        user = update.effective_user
-        self.db.update_user_activity(user.id)
-        
-        if not context.args:
-            # Show available pairs
-            keyboard = []
-            for pair in self.available_pairs:
-                keyboard.append([InlineKeyboardButton(f"Subscribe to {pair}", callback_data=f"sub_{pair}")])
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(
-                "🔔 **Choose a pair to subscribe to:**\n\nYou'll receive updates when significant price movements occur.",
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
-            return
-        
-        pair = context.args[0].upper()
-        resolved_pair = self.resolve_pair_name(pair)
-        
-        if resolved_pair not in self.available_pairs:
-            await update.message.reply_text(f"❌ Pair '{pair}' is not available. Available pairs: {', '.join(self.available_pairs)}")
-            return
-        
-        user_data = self.db.get_user_by_telegram_id(user.id)
-        if not user_data:
-            await update.message.reply_text("❌ Please start the bot first using /start")
-            return
-        
-        success = self.db.subscribe_user_to_pair(user_data['id'], resolved_pair)
-        if success:
-            display_name = pair if pair != resolved_pair else resolved_pair
-            await update.message.reply_text(f"✅ Successfully subscribed to {display_name} updates!")
-        else:
-            await update.message.reply_text("❌ Error subscribing to pair. Please try again.")
-    
-    async def unsubscribe_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /unsubscribe command"""
-        user = update.effective_user
-        self.db.update_user_activity(user.id)
-        
-        if not context.args:
-            await update.message.reply_text(
-                "❌ **Please specify a pair to unsubscribe from!**\n\n"
-                "**Usage:** `/unsubscribe [pair]`\n\n"
-                "**Example:** `/unsubscribe ICP/nICP`\n\n"
-                "**Available pairs:** " + ", ".join(self.available_pairs),
-                parse_mode='Markdown'
-            )
-            return
-        
-        pair = context.args[0].upper()
-        
-        if pair not in self.available_pairs:
-            await update.message.reply_text(f"❌ Pair {pair} is not available. Available pairs: {', '.join(self.available_pairs)}")
-            return
-        
-        user_data = self.db.get_user_by_telegram_id(user.id)
-        if not user_data:
-            await update.message.reply_text("❌ Please start the bot first using /start")
-            return
-        
-        success = self.db.remove_user_subscription(user_data['id'], pair)
-        if success:
-            await update.message.reply_text(
-                f"✅ **Successfully unsubscribed!**\n\n"
-                f"🪙 You will no longer receive updates for **{pair}**\n\n"
-                f"💡 Use `/subscribe {pair}` to re-subscribe anytime!",
-                parse_mode='Markdown'
-            )
-        else:
-            await update.message.reply_text("❌ Error unsubscribing. You might not be subscribed to this pair.")
-    
-    async def alerts_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /alerts command"""
-        user = update.effective_user
-        self.db.update_user_activity(user.id)
-        
-        user_data = self.db.get_user_by_telegram_id(user.id)
-        if not user_data:
-            await update.message.reply_text("❌ Please start the bot first using /start")
-            return
-        
-        alerts = self.db.get_user_alerts(user_data['id'])
-        
-        if not alerts:
-            message = """
-⚡ **No Active Alerts**
-
-You don't have any price alerts set up yet.
-
-**💡 Set your first alert:**
-`/setalert ICP/nICP price_up 5`
-
-This will notify you when ICP/nICP price increases by 5%!
-            """
-        else:
-            message = "⚡ **Your Active Alerts**\n\n"
-            for i, alert in enumerate(alerts, 1):
-                alert_desc = self.alert_types.get(alert['alert_type'], alert['alert_type'])
-                status = "🟢 Active" if alert.get('is_active', True) else "🔴 Inactive"
-                message += f"**{i}.** {alert['pair']}\n"
-                message += f"   📊 {alert_desc} ({alert['threshold']}%)\n"
-                message += f"   {status}\n\n"
-            
-            message += "💡 Use `/setalert` to add more alerts!"
-        
-        await update.message.reply_text(message, parse_mode='Markdown')
-
-    async def set_alert_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /setalert command"""
-        user = update.effective_user
-        self.db.update_user_activity(user.id)
-        
-        if len(context.args) < 3:
-            await update.message.reply_text(
-                "❌ **Invalid format!**\n\n"
-                "**Usage:** `/setalert [pair] [type] [threshold]`\n\n"
-                "**Example:** `/setalert ICP/nICP price_up 5`\n"
-                "This sets an alert when ICP/nICP price increases by 5%\n\n"
-                "**Alert types:** price_up, price_down, volume_spike",
-                parse_mode='Markdown'
-            )
-            return
-        
-        pair = context.args[0].upper()
-        resolved_pair = self.resolve_pair_name(pair)
-        alert_type = context.args[1].lower()
-        try:
-            threshold = float(context.args[2])
-        except ValueError:
-            await update.message.reply_text("❌ Invalid threshold value. Please enter a number.")
-            return
-        
-        if resolved_pair not in self.available_pairs:
-            await update.message.reply_text(f"❌ Pair '{pair}' is not available. Available pairs: {', '.join(self.available_pairs)}")
-            return
-        
-        if alert_type not in self.alert_types:
-            await update.message.reply_text(f"❌ Invalid alert type. Available types: {', '.join(self.alert_types.keys())}")
-            return
-        
-        user_data = self.db.get_user_by_telegram_id(user.id)
-        if not user_data:
-            await update.message.reply_text("❌ Please start the bot first using /start")
-            return
-        
-        success = self.db.add_user_alert(user_data['id'], resolved_pair, alert_type, threshold)
-        if success:
-            alert_desc = self.alert_types[alert_type]
-            display_name = pair if pair != resolved_pair else resolved_pair
-            await update.message.reply_text(
-                f"✅ **Alert set successfully!**\n\n"
-                f"🪙 **Pair:** {display_name}\n"
-                f"⚡ **Type:** {alert_desc}\n"
-                f"📊 **Threshold:** {threshold}%\n\n"
-                f"You'll be notified when this condition is met!",
-                parse_mode='Markdown'
-            )
-        else:
-            await update.message.reply_text("❌ Error setting alert. Please try again.")
-    
-    async def portfolio_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /portfolio command"""
-        user = update.effective_user
-        self.db.update_user_activity(user.id)
-        
-        user_data = self.db.get_user_by_telegram_id(user.id)
-        if not user_data:
-            await update.message.reply_text("❌ Please start the bot first using /start")
-            return
-        
-        subscriptions = self.db.get_user_subscriptions(user_data['id'])
-        alerts = self.db.get_user_alerts(user_data['id'])
-        
-        message = "📱 **Your Portfolio**\n\n"
-        
-        if subscriptions:
-            message += "🔔 **Active Subscriptions:**\n"
-            for pair in subscriptions:
-                message += f"• {pair}\n"
-            message += "\n"
-        else:
-            message += "🔔 **No active subscriptions**\n\n"
-        
-        if alerts:
-            message += "⚡ **Active Alerts:**\n"
-            for alert in alerts:
-                alert_desc = self.alert_types.get(alert['alert_type'], alert['alert_type'])
-                message += f"• {alert['pair']} - {alert_desc} ({alert['threshold']}%)\n"
-            message += "\n"
-        else:
-            message += "⚡ **No active alerts**\n\n"
-        
-        message += "💡 Use /subscribe or /setalert to add more!"
-        
-        await update.message.reply_text(message, parse_mode='Markdown')
-    
-    async def referral_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /referral command"""
-        user = update.effective_user
-        self.db.update_user_activity(user.id)
-        
-        user_data = self.db.get_user_by_telegram_id(user.id)
-        if not user_data:
-            await update.message.reply_text("❌ Please start the bot first using /start")
-            return
-        
-        stats = self.db.get_user_stats(user_data['id'])
-        referral_count = stats.get('referrals', 0)
-        referral_code = user_data.get('referral_code', '')
-        
-        message = f"""
-👥 **Your Referral Program**
-
-🎯 **Your Code:** `{referral_code}`
-👥 **Referrals:** {referral_count}
-
-**🎁 Referral Benefits:**
-• 5+ referrals: Priority alerts ⚡
-• 15+ referrals: Custom features 🎛️
-• 50+ referrals: Premium access 👑
-
-**📤 Share your link:**
-`https://t.me/your_bot_username?start={referral_code}`
-
-Earn rewards by inviting friends to monitor ICP prices!
-        """
-        
-        await update.message.reply_text(message, parse_mode='Markdown')
-    
-    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /stats command"""
-        user = update.effective_user
-        self.db.update_user_activity(user.id)
-        
-        user_data = self.db.get_user_by_telegram_id(user.id)
-        if not user_data:
-            await update.message.reply_text("❌ Please start the bot first using /start")
-            return
-        
-        stats = self.db.get_user_stats(user_data['id'])
-        
-        message = f"""
-📊 **Your Statistics**
-
-👤 **Account:** {user_data.get('username', 'N/A')}
-📅 **Member since:** {user_data.get('created_at', 'Unknown')[:10]}
-🔔 **Subscriptions:** {stats.get('subscriptions', 0)}
-⚡ **Active alerts:** {stats.get('alerts', 0)}
-👥 **Referrals:** {stats.get('referrals', 0)}
-
-Keep monitoring and growing! 🚀
-        """
-        
-        await update.message.reply_text(message, parse_mode='Markdown')
-    
-    async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /status command"""
-        health_status = self.api_client.health_check()
-        
-        message = "🔧 **Bot Status**\n\n"
-        message += f"🤖 **Bot:** ✅ Online\n"
-        message += f"🔄 **ICPSwap API:** {'✅ Connected' if health_status.get('icpswap') else '❌ Disconnected'}\n"
-        message += f"🔄 **KongSwap API:** {'✅ Connected' if health_status.get('kongswap') else '❌ Disconnected'}\n"
-        message += f"💾 **Database:** ✅ Connected\n"
-        message += f"🕒 **Last check:** {datetime.now().strftime('%H:%M:%S')}\n"
-        
-        await update.message.reply_text(message, parse_mode='Markdown')
-    
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle inline button callbacks"""
+        """Handle button callbacks"""
         query = update.callback_query
         await query.answer()
         
-        data = query.data
+        if query.data == "discount":
+            # Create a fake update object for the discount command
+            fake_update = type('obj', (object,), {'message': query.message})()
+            await self.show_discount_opportunities(fake_update, context)
+        elif query.data == "explain":
+            await self.explain_command_callback(query)
+        elif query.data == "calculator":
+            await self.calculator_command_callback(query)
+
+    async def discount_command_callback(self, query):
+        """Handle discount button callback"""
+        await query.edit_message_text("🔍 Checking nICP discount opportunities...")
         
-        if data == "quick_prices":
-            await self.price_command(update, context)
-        elif data == "quick_subscribe":
-            await self.subscribe_command(update, context)
-        elif data == "quick_alert":
+        try:
+            # Use async method with WaterNeuron integration
+            arbitrage_data = await self.arbitrage_client.get_nicp_data()
+            
+            if not arbitrage_data.get('opportunities'):
+                await query.edit_message_text("❌ No nICP discount opportunities found at the moment. Try again later!")
+                return
+            
+            # Build response
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            waterneuron_status = arbitrage_data.get('waterneuron_status', '❌ Offline')
+            best = arbitrage_data.get('best_opportunity')
+            
+            header = [
+                "🎯 **nICP Discount Tracker**",
+                f"🕐 Last updated: {timestamp}",
+                f"🌊 WaterNeuron: {waterneuron_status}",
+                "",
+                f"💰 **Best Discount: {best['arbitrage']['profit_percentage_6m']:.1f}%** ({best['exchange']})" if best else "💰 **No viable discounts found**",
+                "",
+                "📊 **Available Discounts:**"
+            ]
+            
+            response_parts = header
+            
+            # Add all opportunities
+            response_parts.append("📋 **All Opportunities:**")
+            for opp in arbitrage_data['opportunities']:
+                arb = opp['arbitrage']
+                status = "✅" if arb['viable'] else "❌"
+                response_parts.append(
+                    f"{status} **{opp['dex']}:** {arb['profit_percentage_6m']:.1f}% profit "
+                    f"(${opp.get('volume_24h_usd', 0):,.0f} vol)"
+                )
+            
+            response_parts.extend([
+                "",
+                "💡 **How it works:**",
+                "1. Buy nICP at discount price on DEX",
+                "2. Dissolve nICP → Get full ICP value",
+                "3. Wait 6 months for unlock",
+                "4. Profit from the discount!",
+                "",
+                "⚠️ **Risks:** 6-month lock-up, market volatility, protocol risk"
+            ])
+            
+            # Calculate potential profit for different amounts
+            profit_examples = []
+            for amount in [100, 500, 1000, 5000]:
+                profit_icp = (amount * best['arbitrage']['profit_percentage_6m']) / 100
+                profit_examples.append(f"• {amount:,} ICP → **+{profit_icp:.0f} ICP** profit")
+            
+            examples_text = "\n".join(profit_examples)
+            
+            explanation = f"""
+💰 **The Discount Opportunity:**
+
+{examples_text}
+
+⏰ **Timeline:** 6-month lock-up period
+📈 **APY:** {best['arbitrage']['annualized_return']:.1f}% annualized return
+
+💡 **How it works:**
+1. Buy nICP at discount price on DEX
+2. Dissolve nICP → Get full ICP value  
+3. Wait 6 months for unlock
+4. Profit from the discount!
+
+⚠️ **Risks:** 6-month lock-up, market volatility, protocol risk
+"""
+            
+            response_parts.append(explanation)
+            
+            # Create action buttons
+            keyboard = [
+                [InlineKeyboardButton("🔄 Refresh", callback_data="discount")],
+                [InlineKeyboardButton("🧮 Calculator", callback_data="calculator")],
+                [InlineKeyboardButton("📚 Learn More", callback_data="explain")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
             await query.edit_message_text(
-                "⚡ **Set an Alert**\n\n"
-                "Use this format:\n"
-                "`/setalert [pair] [type] [threshold]`\n\n"
-                "**Example:**\n"
-                "`/setalert ICP/nICP price_up 5`\n\n"
-                "**Available pairs:** ICP/nICP, ICP/USD\n"
-                "**Alert types:** price_up, price_down, volume_spike",
-                parse_mode='Markdown'
+                "\n".join(response_parts),
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=reply_markup
             )
-        elif data == "help":
-            await self.help_command(update, context)
-        elif data.startswith("sub_"):
-            pair = data[4:]  # Remove "sub_" prefix
-            context.args = [pair]
-            await self.subscribe_command(update, context)
-    
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle regular text messages"""
-        user = update.effective_user
-        self.db.update_user_activity(user.id)
-        
-        text = update.message.text.lower()
-        
-        # Simple keyword responses
-        if 'price' in text and 'icp' in text:
-            await self.price_command(update, context)
-        elif 'help' in text:
-            await self.help_command(update, context)
-        else:
-            await update.message.reply_text(
-                "🤔 I didn't understand that. Try /help for available commands or use the buttons below!",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("📊 Prices", callback_data="quick_prices")],
-                    [InlineKeyboardButton("📱 Help", callback_data="help")]
-                ])
-            )
-    
-    async def send_alert_to_user(self, telegram_id: int, message: str):
-        """Send alert message to a specific user"""
-        try:
-            await self.application.bot.send_message(chat_id=telegram_id, text=message, parse_mode='Markdown')
-            return True
+            
         except Exception as e:
-            logger.error(f"Failed to send alert to user {telegram_id}: {e}")
-            return False
-    
-    async def send_channel_update(self, channel_id: str, message: str):
-        """Send update to channel"""
-        try:
-            await self.application.bot.send_message(chat_id=channel_id, text=message, parse_mode='Markdown')
-            return True
-        except Exception as e:
-            logger.error(f"Failed to send channel update: {e}")
-            return False
-    
-    def run(self):
-        """Start the bot"""
-        if not self.application:
-            self.setup_handlers()
+            logger.error(f"Error in discount callback: {e}")
+            await query.edit_message_text("❌ Error fetching data. Please try again.")
+
+    async def explain_command_callback(self, query):
+        """Handle explain button callback"""
+        explanation = """
+📚 **nICP Discount Quick Guide**
+
+💰 **The Opportunity:**
+• Buy nICP at discount price on DEX
+• Unstake immediately (6-month dissolution)
+• Receive 1.111 ICP after 6 months
+• **Profit: ~13.5% in 6 months**
+
+🎯 **Why It Works:**
+• Direct staking: 1 ICP = 0.9001 nICP
+• DEX trading: Often closer to 1:1 ratio
+• Discount gap = Your profit opportunity
+
+⚠️ **Key Risks:**
+• 6-month lock-up period
+• ICP price volatility
+• Low liquidity on some DEXes
+
+Ready to check live opportunities?
+        """
         
-        logger.info("Starting Telegram bot...")
-        self.application.run_polling(allowed_updates=Update.ALL_TYPES) 
+        keyboard = [
+            [InlineKeyboardButton("🎯 Check Opportunities", callback_data="discount")],
+            [InlineKeyboardButton("🧮 Calculator", callback_data="calculator")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            explanation,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+
+    async def calculator_command_callback(self, query):
+        """Handle calculator button callback"""
+        calculator_msg = """
+🧮 **Quick Profit Calculator**
+
+**Your Investment → Profit:**
+• 100 ICP → 13.5 ICP profit
+• 500 ICP → 67.5 ICP profit  
+• 1,000 ICP → 135 ICP profit
+• 5,000 ICP → 675 ICP profit
+
+📊 **Current Rate:**
+• nICP price: ~0.979 ICP
+• Profit per nICP: 0.132 ICP
+• Return: 13.5% in 6 months
+• Annualized: ~27% APY
+
+💡 **Formula:**
+Profit = Investment ÷ 0.979 × 0.132
+        """
+        
+        keyboard = [
+            [InlineKeyboardButton("🎯 Live Data", callback_data="discount")],
+            [InlineKeyboardButton("📚 Learn More", callback_data="explain")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            calculator_msg,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+
+    async def start_bot(self):
+        """Start the Telegram bot"""
+        logger.info("Starting nICP Discount Telegram bot...")
+        
+        # Create application
+        self.application = Application.builder().token(self.token).build()
+        
+        # Add handlers
+        self.application.add_handler(CommandHandler("start", self.start_command))
+        self.application.add_handler(CommandHandler("discount", self.show_discount_opportunities))
+        self.application.add_handler(CommandHandler("explain", self.explain_command))
+        self.application.add_handler(CommandHandler("calculator", self.calculator_command))
+        self.application.add_handler(CommandHandler("help", self.help_command))
+        self.application.add_handler(CallbackQueryHandler(self.button_callback))
+        
+        # Start the bot
+        await self.application.initialize()
+        await self.application.start()
+        await self.application.updater.start_polling()
+        
+        # Keep running
+        await self.application.updater.idle()
+
+    async def stop_bot(self):
+        """Stop the Telegram bot"""
+        if self.application:
+            await self.application.stop()
+            await self.application.shutdown() 
